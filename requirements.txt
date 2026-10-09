@@ -1,0 +1,13 @@
+customtkinter
+google-generativeai
+aiohttp
+playwright
+sqlalchemy
+reportlab
+websockets
+tldextract
+arabic-reshaper
+python-bidi
+psutil
+flask
+pywin32
