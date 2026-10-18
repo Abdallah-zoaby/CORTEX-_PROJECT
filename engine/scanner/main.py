@@ -2629,6 +2629,9 @@ class CortexScanner:
         
         logger.info("🧹 Cleanup completed")
 
+# Alias for backwards compatibility with legacy modules and GUI
+TitaniumScannerV15 = CortexScanner
+
 # === WEB INTERFACE ===
 class WebInterface:
     """Web-based interface for the scanner"""
