@@ -2,10 +2,14 @@ import sys
 import os
 import time
 from colorama import init, Fore, Style
-from engine.scanner import CortexScanner
+from engine.cortex import CortexScanner
 from reports.pdf_generator import generate_pdf_report
 
-# تهيئة الألوان
+# تهيئة الألوان والترميز
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 init(autoreset=True)
 
 def print_banner():

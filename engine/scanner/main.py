@@ -2088,7 +2088,9 @@ class ReportGenerator:
 class CortexScanner:
     """Enhanced Cortex Security Suite v15.0"""
     
-    def __init__(self, config: ScanConfig):
+    def __init__(self, config: Optional[ScanConfig] = None):
+        if config is None:
+            config = ScanConfig(target_url="http://127.0.0.1:5555")
         self.config = config
         self.scan_id = self._generate_scan_id()
         self.session = None

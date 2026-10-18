@@ -22,23 +22,30 @@ def get_file_hash(file_path):
 
 def check_digital_signature(file_path):
     """فحص التوقيع الرقمي باستخدام PowerShell"""
+    if not file_path.lower().endswith(('.exe', '.dll')):
+        return False
     try:
         cmd = f'Get-AuthenticodeSignature "{file_path}" | Select-Object -ExpandProperty Status'
-        result = subprocess.check_output(["powershell", "-Command", cmd], text=True).strip()
+        result = subprocess.check_output(["powershell", "-NoProfile", "-NonInteractive", "-Command", cmd], text=True, timeout=2).strip()
         return "Valid" in result
     except:
         return False
 
-def scan_suspicious_files(directory):
+def scan_suspicious_files(directory, max_files=15):
     suspicious_files = []
-    extensions = ['.exe', '.bat', '.ps1', '.vbs', '.dll']
+    extensions = ('.exe', '.bat', '.ps1', '.vbs', '.dll')
     
     print(f"      [DEBUG] Deep scanning: {directory}")
-    
+    checked = 0
     for root, dirs, files in os.walk(directory):
+        dirs[:] = [d for d in dirs if not d.startswith('.') and d.lower() not in ('cache', 'node_modules', 'code cache', 'gpu_cache')]
+        if checked >= max_files:
+            dirs.clear()
+            break
         for file in files:
-            if file.lower().endswith(tuple(extensions)):
+            if file.lower().endswith(extensions):
                 full_path = os.path.join(root, file)
+                checked += 1
                 
                 # 1. فحص التوقيع
                 is_signed = check_digital_signature(full_path)
@@ -64,5 +71,9 @@ def scan_suspicious_files(directory):
                         "hash": file_hash,
                         "severity": severity
                     })
+                
+                if checked >= max_files:
+                    dirs.clear()
+                    break
                     
     return suspicious_files
