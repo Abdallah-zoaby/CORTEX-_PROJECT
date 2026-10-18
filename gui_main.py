@@ -11,7 +11,12 @@ import math
 import google.generativeai as genai
 from engine.scanner.main import CortexScanner, ScanConfig, ScanMode, VulnerabilityType, SeverityLevel
 from engine.scanner.main import PortScanner, SubdomainEnumerator, BruteForceEngine, SSLTLSAnalyzer, JSSecretsAnalyzer
-from simulation.ransom import RansomSim
+try:
+    from simulation.ransom import RansomSim
+except ImportError:
+    class RansomSim:
+        def execute_encryption(self):
+            return "⚠️ Ransomware simulation module offline or quarantined by Windows Defender."
 from simulation.leak import DataLeakSim
 from simulation.persist import PersistenceSim
 from core.remediation import CortexFixer
