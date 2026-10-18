@@ -1279,6 +1279,11 @@ class CortexProApp(ctk.CTk):
 
     def run_ai(self):
         """Strategic AI Security Analysis for the entire system"""
+        try:
+            current_tab = self.tabs.get() if hasattr(self, 'tabs') else 'DASHBOARD'
+        except Exception:
+            current_tab = 'DASHBOARD'
+            
         async def _audit():
             # Build professional context from all system parts
             persona = "CORTEX Red Team Assistant" if "WAR ROOM" in current_tab else ("CORTEX CISO Strategist" if "ENTERPRISE" in current_tab else "CORTEX Security Analyst")

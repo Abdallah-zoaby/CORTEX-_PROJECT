@@ -26,7 +26,7 @@ def check_digital_signature(file_path):
         return False
     try:
         cmd = f'Get-AuthenticodeSignature "{file_path}" | Select-Object -ExpandProperty Status'
-        result = subprocess.check_output(["powershell", "-NoProfile", "-NonInteractive", "-Command", cmd], text=True, timeout=2).strip()
+        result = subprocess.check_output(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", cmd], text=True, stderr=subprocess.DEVNULL, timeout=2).strip()
         return "Valid" in result
     except:
         return False
@@ -34,11 +34,12 @@ def check_digital_signature(file_path):
 def scan_suspicious_files(directory, max_files=15):
     suspicious_files = []
     extensions = ('.exe', '.bat', '.ps1', '.vbs', '.dll')
+    ignore_dirs = {'node_modules', '.git', 'venv', '.venv', '__pycache__', '.idea', '.vscode', 'cache', 'code cache', 'gpu_cache'}
     
     print(f"      [DEBUG] Deep scanning: {directory}")
     checked = 0
     for root, dirs, files in os.walk(directory):
-        dirs[:] = [d for d in dirs if not d.startswith('.') and d.lower() not in ('cache', 'node_modules', 'code cache', 'gpu_cache')]
+        dirs[:] = [d for d in dirs if not d.startswith('.') and d.lower() not in ignore_dirs]
         if checked >= max_files:
             dirs.clear()
             break

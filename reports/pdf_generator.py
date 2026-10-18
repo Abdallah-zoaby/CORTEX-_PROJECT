@@ -36,15 +36,27 @@ style_normal = ParagraphStyle(name='Normal', parent=styles['Normal'], fontName=F
 style_arabic = ParagraphStyle(name='Arabic', parent=styles['Normal'], fontName=FONT_NAME, fontSize=12, leading=16, alignment=2) # Right align
 style_code = ParagraphStyle(name='Code', parent=styles['Code'], fontName='Courier', fontSize=8, backColor=colors.lightgrey, borderPadding=5)
 
-def generate_pdf_report(scan_results, simulation_logs="", ai_analysis="", filename="CORTEX_Final_Report.pdf", web_findings=None):
-    # Support both 2-arg call generate_pdf_report(engine, "file.pdf") and 5-arg call
-    if isinstance(simulation_logs, str) and simulation_logs.endswith(".pdf"):
+def generate_pdf_report(scan_results, simulation_logs='', ai_analysis='', filename='CORTEX_Final_Report.pdf', web_findings=None):
+    # Support positional invocation: generate_pdf_report(result_engine, "output.pdf")
+    if isinstance(simulation_logs, str) and simulation_logs.lower().endswith('.pdf'):
         filename = simulation_logs
-        simulation_logs = ""
-        ai_analysis = ""
-    
+        simulation_logs = ''
+        ai_analysis = ''
+
     if web_findings is None and hasattr(scan_results, 'findings'):
-        web_findings = [{'severity': f.get('severity', 'HIGH'), 'type': 'System Finding', 'desc': f.get('desc', ''), 'url': 'Local Host'} for f in scan_results.findings]
+        web_findings = [
+            {
+                'severity': f.get('severity', 'INFO') if isinstance(f, dict) else getattr(f, 'severity', 'INFO'),
+                'type': 'System Finding' if isinstance(f, dict) else getattr(f, 'type', 'System Finding'),
+                'desc': f.get('desc', '') if isinstance(f, dict) else getattr(f, 'desc', str(f)),
+                'url': 'Local Host / OS',
+                'evidence': ''
+            }
+            for f in scan_results.findings
+        ]
+
+    ai_analysis = ai_analysis or ''
+    simulation_logs = simulation_logs or ''
 
     doc = SimpleDocTemplate(filename, pagesize=A4, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
     story = []

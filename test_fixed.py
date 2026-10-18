@@ -1,8 +1,16 @@
 # test_fixed.py
+import sys
 import asyncio
 from urllib.parse import urlparse, urljoin, urlencode
 import re
 import warnings
+
+if sys.platform == 'win32':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stderr.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
 
 # Suppress warnings for cleaner output
 warnings.filterwarnings("ignore")

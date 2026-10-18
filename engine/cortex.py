@@ -1,6 +1,14 @@
 import time
 import sys
 import os
+
+if sys.platform == 'win32':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stderr.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+
 from colorama import init
 from core import network, system, forensics
 from engine.scorer import RiskEngine

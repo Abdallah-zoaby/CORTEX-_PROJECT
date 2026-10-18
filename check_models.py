@@ -1,4 +1,12 @@
+import sys
 import google.generativeai as genai
+
+if sys.platform == 'win32':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stderr.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
 
 # مفتاحك الشخصي
 API_KEY = "AIzaSyBOmJyejA9vuQ5ysx06tteD5ubKv6V-Yrw"

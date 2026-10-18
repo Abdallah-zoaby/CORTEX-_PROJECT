@@ -1,6 +1,14 @@
 import sys
 import os
 import time
+
+if sys.platform == 'win32':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stderr.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+
 from colorama import init, Fore, Style
 from engine.cortex import CortexScanner
 from reports.pdf_generator import generate_pdf_report
@@ -52,7 +60,7 @@ def start_cortex_system():
 
     # طباعة التقرير
     print(f"\n{Fore.BLUE}📄 Generating CORTEX Report...", end="")
-    generate_pdf_report(result_engine, "CORTEX_Final_Report.pdf")
+    generate_pdf_report(result_engine, filename="CORTEX_Final_Report.pdf")
     print(f" {Fore.GREEN}Done!")
 
 if __name__ == "__main__":
