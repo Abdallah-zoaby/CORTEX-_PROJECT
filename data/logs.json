@@ -1,41 +1,41 @@
 [
     {
-        "time": "20:52:05",
+        "time": "16:30:13",
         "actor": "SYSTEM",
         "action": "INIT",
         "details": "Starting Purple Team Exercise against 127.0.0.1 (Twin Node)",
         "severity": "INFO"
     },
     {
-        "time": "20:52:06",
+        "time": "16:30:14",
         "actor": "\ud83d\udfe5 RED",
         "action": "Port Scanning & Service Enum",
         "details": "Agent: Recon operating on 127.0.0.1 (Twin Node)",
         "severity": "WARNING"
     },
     {
-        "time": "20:52:08",
+        "time": "16:30:15",
         "actor": "\ud83d\udfe5 RED",
         "action": "SQL Injection Payload Delivery",
         "details": "Agent: Exploiter operating on 127.0.0.1 (Twin Node)",
         "severity": "WARNING"
     },
     {
-        "time": "20:52:09",
+        "time": "16:30:16",
         "actor": "\ud83d\udfe6 BLUE",
         "action": "DETECTION",
         "details": "Unusual Payload execution pattern detected.",
         "severity": "CRITICAL"
     },
     {
-        "time": "20:52:10",
+        "time": "16:30:17",
         "actor": "\ud83d\udfe6 BLUE",
         "action": "RESPONSE",
         "details": "Isolated endpoint & Blocked IP 127.0.0.1 (Twin Node)",
         "severity": "SUCCESS"
     },
     {
-        "time": "20:52:10",
+        "time": "16:30:17",
         "actor": "SYSTEM",
         "action": "COMPLETE",
         "details": "Simulation End. Final Risk Score: 6",
