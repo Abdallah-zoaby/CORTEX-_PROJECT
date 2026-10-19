@@ -280,7 +280,7 @@ class CortexProApp(ctk.CTk):
         self.stat_compliance = self.create_hud_stat("COMPLIANCE", "100%", "#1f6feb", 3)
 
         # Tabs System
-        self.tabs = ctk.CTkTabview(self.main_area, fg_color="#161b22", segmented_button_fg_color="#0d1117", segmented_button_selected_color=self.colors["accent"])
+        self.tabs = ctk.CTkTabview(self.main_area, fg_color="#161b22", segmented_button_fg_color="#0d1117", segmented_button_selected_color=self.colors["accent"], command=self._on_tab_change)
         self.tabs.grid(row=1, column=0, padx=20, pady=(0, 20), sticky="nsew")
 
         self.tab_scan = self.tabs.add("  🖥️ DASHBOARD  ")
@@ -319,6 +319,7 @@ class CortexProApp(ctk.CTk):
         
         # Scanner & State Initialization
         self.findings_count = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
+        self.vuln_type_count = {"SQLI": 0, "XSS": 0, "LFI": 0, "SENSITIVE": 0, "OTHER": 0}
         self.risk_score = 100
         self.scan_results = None
         self.web_findings = []
@@ -637,6 +638,7 @@ class CortexProApp(ctk.CTk):
             self.log(self.recon_output, f"  💀 [{f.severity.value}] {f.description}")
             self.log(self.recon_output, f"     📎 {f.evidence[:80]}")
             self.log(self.recon_output, f"     🔗 {f.url}")
+            self.record_vuln_type("secret")
         if not findings:
             self.log(self.recon_output, "  ✅ No secrets found in JavaScript files.")
         self.log(self.recon_output, f"{'═'*50}\n")
@@ -958,7 +960,7 @@ class CortexProApp(ctk.CTk):
         for threat in threats:
             msg = f"🛡️ BEHAVIORAL ALERT: {threat['details']} (PROC: {threat['source']})"
             self.log(self.console, msg, "CRITICAL" if threat['severity'] == "CRITICAL" else "WARNING")
-            self.update_stats(threat['severity'])
+            self.update_stats(threat['severity'], threat.get('type', threat.get('details', 'OTHER')))
             
             # Specifically for Dashboard
             if hasattr(self, 'activity_lbls'):
@@ -1029,6 +1031,7 @@ class CortexProApp(ctk.CTk):
         
         for f in findings + secrets:
             self.log(self.apk_output, f"  [!] {f['type']}: {f['item']}", f['severity'])
+            self.update_stats(f.get('severity', 'HIGH'), f.get('type'))
         self.log(self.apk_output, "✅ Mobile Audit Complete.", "SUCCESS")
 
     def run_api_audit(self):
@@ -1039,7 +1042,7 @@ class CortexProApp(ctk.CTk):
         findings = auditor.audit_full()
         for f in findings:
             self.log(self.api_output, f"  [!] {f['type']}: {f['item']}", f['severity'])
-            self.update_stats(f['severity'])
+            self.update_stats(f['severity'], f.get('type'))
             
         self.log(self.api_output, "✅ API Audit Complete. Critical holes found.", "CRITICAL")
         self._update_risk_score()
@@ -1098,16 +1101,25 @@ class CortexProApp(ctk.CTk):
         self.charts_canvas.pack(fill="both", expand=True, padx=40, pady=20)
         self.render_charts()
 
+    def _on_tab_change(self):
+        try:
+            if hasattr(self, 'tabs') and "ANALYTICS" in self.tabs.get():
+                self.render_charts()
+        except Exception:
+            pass
+
     def render_charts(self):
+        if not hasattr(self, 'charts_canvas'):
+            return
         self.charts_canvas.delete("bar")
         w = 1000
         h = 250
         data = {
-            "SQLI": self.findings_count.get("SQLI", 0),
-            "XSS": self.findings_count.get("XSS", 0),
-            "LFI": self.findings_count.get("LFI", 0),
-            "SENSITIVE": self.findings_count.get("SENSITIVE", 0),
-            "OTHER": self.findings_count.get("HIGH", 0)
+            "SQLI": self.vuln_type_count.get("SQLI", 0),
+            "XSS": self.vuln_type_count.get("XSS", 0),
+            "LFI": self.vuln_type_count.get("LFI", 0),
+            "SENSITIVE": self.vuln_type_count.get("SENSITIVE", 0),
+            "OTHER": self.vuln_type_count.get("OTHER", 0)
         }
         
         max_val = max(data.values()) if any(data.values()) else 10
@@ -1128,6 +1140,27 @@ class CortexProApp(ctk.CTk):
             self.charts_canvas.create_text(x0 + bar_width/2, h-15, text=label, fill="#8b949e", font=("Segoe UI", 10, "bold"), tags="bar")
             # Value
             self.charts_canvas.create_text(x0 + bar_width/2, y1-15, text=str(val), fill=self.colors["text"], font=("JetBrains Mono", 12), tags="bar")
+
+    def record_vuln_type(self, vuln_type):
+        """Classify vulnerability type into SQLI / XSS / LFI / SENSITIVE / OTHER and increment self.vuln_type_count"""
+        if hasattr(vuln_type, 'value'):
+            type_str = f"{vuln_type.value} {getattr(vuln_type, 'name', '')}".lower()
+        else:
+            type_str = str(vuln_type).lower() if vuln_type is not None else ""
+
+        if "sql" in type_str:
+            category = "SQLI"
+        elif "xss" in type_str or "cross-site scripting" in type_str or "cross site scripting" in type_str:
+            category = "XSS"
+        elif "lfi" in type_str or "local file inclusion" in type_str or "path traversal" in type_str:
+            category = "LFI"
+        elif any(k in type_str for k in ["secret", "api key", "apikey", "sensitive", "exposed"]):
+            category = "SENSITIVE"
+        else:
+            category = "OTHER"
+
+        self.vuln_type_count[category] = self.vuln_type_count.get(category, 0) + 1
+        self.after(0, self.render_charts)
 
     def update_network_map(self, url):
         """Enhanced Dynamic Network Map with animated connections"""
@@ -1161,7 +1194,9 @@ class CortexProApp(ctk.CTk):
         # Could show a tooltip here
         pass
 
-    def update_stats(self, level):
+    def update_stats(self, level, vuln_type=None):
+        if vuln_type is not None:
+            self.record_vuln_type(vuln_type)
         if level in ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]:
             if level == "CRITICAL": self.findings_count["CRITICAL"] += 1
             elif level == "HIGH": self.findings_count["HIGH"] += 1
@@ -1248,11 +1283,13 @@ class CortexProApp(ctk.CTk):
             return
         
         for vuln in self.web_findings:
-            self.update_stats(vuln.severity.value)
+            vuln_type = vuln.type.value if hasattr(vuln.type, 'value') else vuln.type
+            self.update_stats(vuln.severity.value, vuln_type)
             card = VulnerabilityCard(self.web_ai_panel, vuln)
             card.pack(fill="x", padx=10, pady=5)
             
         self._update_risk_score()
+        self.after(0, self.render_charts)
         self.web_ai_panel._parent_canvas.yview_moveto(1.0)
 
     def _update_risk_score(self):
@@ -1452,9 +1489,9 @@ class CortexProApp(ctk.CTk):
         # Impact global state
         self._on_intrusion_detected("CRITICAL", "Ransomware Simulation Active")
 
-    def _on_intrusion_detected(self, level, msg):
+    def _on_intrusion_detected(self, level, msg, vuln_type="OTHER"):
         """Unified method to trigger alerts and update stats from any module"""
-        self.update_stats(level)
+        self.update_stats(level, vuln_type)
         self.scanner.alerts.trigger("INTRUSION DETECTED", msg, level)
         self.log(self.console, f"🚨 INTRUSION: {msg}", level)
 
