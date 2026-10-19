@@ -1,0 +1,47 @@
+name: CORTEX CI/CD Tests & Code Audit
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  test-and-audit:
+    name: Run Automated Tests & Quality Checks
+    runs-on: windows-latest
+
+    steps:
+      - name: 📥 Check out repository
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: 📦 Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install flake8 pytest
+          if (Test-Path "requirements.txt") { pip install -r requirements.txt }
+
+      - name: 🔍 Lint with Flake8 (Syntax & Undefined Names)
+        run: |
+          # التوقف إذا كان هناك أخطاء برمجية أو متغيرات غير معرّفة
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics --exclude=.git,__pycache__,staj\ 1
+
+      - name: 🧪 Run QA Automated Test Suite
+        run: |
+          python qa_test.py
+
+      - name: 🚀 Run URL & Form Logic Tests
+        run: |
+          python test_fixed.py
+
+      - name: 🛡️ Verify Core Modules Import Integrity
+        run: |
+          python -c "import main; print('✅ main.py is intact')"
+          python -c "import gui_main; print('✅ gui_main.py is intact')"
