@@ -220,6 +220,7 @@ class CortexProApp(ctk.CTk):
             "accent": "#238636",     # GitHub Green
             "danger": "#da3633",     # Red
             "warning": "#d29922",    # Orange
+            "success": "#2ea043",    # Green
             "text": "#c9d1d9",       # Light Gray
             "terminal": "#0d1117",   # Black
         }

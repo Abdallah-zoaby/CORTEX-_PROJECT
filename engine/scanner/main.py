@@ -2206,6 +2206,7 @@ class CortexScanner:
     
     async def _initialize_scan(self):
         """Initialize scan in database"""
+        self.scan_id = self._generate_scan_id()
         self.scan_record = Scan(
             scan_uuid=self.scan_id,
             target_url=self.config.target_url,
