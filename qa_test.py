@@ -34,8 +34,10 @@ def run_qa():
     # 2. Test Digital Twin
     print("\n[+] Testing Digital Twin...")
     try:
+        import time
         twin = DigitalTwinTarget()
         twin.start()
+        time.sleep(1)
         print(f"  - Twin Thread Started OK ({twin.get_url()})")
     except Exception as e:
         print(f"  [!] TWIN ERROR: {e}")

@@ -11,3 +11,9 @@ python-bidi
 psutil
 flask
 pywin32
+requests
+pyjwt
+networkx
+pycryptodome
+pyyaml
+colorama
