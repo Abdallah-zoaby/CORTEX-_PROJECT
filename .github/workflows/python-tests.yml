@@ -11,6 +11,9 @@ jobs:
   test-and-audit:
     name: Run Automated Tests & Quality Checks
     runs-on: windows-latest
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
 
     steps:
       - name: 📥 Check out repository
@@ -31,7 +34,7 @@ jobs:
       - name: 🔍 Lint with Flake8 (Syntax & Undefined Names)
         run: |
           # التوقف إذا كان هناك أخطاء برمجية أو متغيرات غير معرّفة
-          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics --exclude=.git,__pycache__,staj\ 1
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics "--exclude=.git,__pycache__,staj 1"
 
       - name: 🧪 Run QA Automated Test Suite
         run: |
@@ -43,5 +46,5 @@ jobs:
 
       - name: 🛡️ Verify Core Modules Import Integrity
         run: |
-          python -c "import main; print('✅ main.py is intact')"
-          python -c "import gui_main; print('✅ gui_main.py is intact')"
+          python -c "import main; print('[OK] main.py is intact')"
+          python -c "import gui_main; print('[OK] gui_main.py is intact')"

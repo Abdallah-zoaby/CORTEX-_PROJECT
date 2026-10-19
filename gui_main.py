@@ -596,7 +596,8 @@ class CortexProApp(ctk.CTk):
                     else:
                         self.after(0, lambda: self.log(self.recon_output, "  🔒 No weak credentials found (tested 50 combos)."))
             except Exception as e:
-                self.after(0, lambda: self.log(self.recon_output, f"  ❌ Error: {e}"))
+                err_msg = f"  ❌ Error: {e}"
+                self.after(0, lambda msg=err_msg: self.log(self.recon_output, msg))
         
         threading.Thread(target=lambda: asyncio.run(_brute()), daemon=True).start()
 
@@ -623,7 +624,8 @@ class CortexProApp(ctk.CTk):
                 findings = await self.scanner.js_analyzer.analyze_page(url, html)
                 self.after(0, lambda: self._display_js_results(findings))
             except Exception as e:
-                self.after(0, lambda: self.log(self.recon_output, f"  ❌ Error: {e}"))
+                err_msg = f"  ❌ Error: {e}"
+                self.after(0, lambda msg=err_msg: self.log(self.recon_output, msg))
         
         threading.Thread(target=lambda: asyncio.run(_js()), daemon=True).start()
 
@@ -1319,7 +1321,8 @@ class CortexProApp(ctk.CTk):
                 response = model.generate_content(prompt)
                 self.after(0, lambda: self._display_strategic_report(response.text))
             except Exception as e:
-                self.after(0, lambda: self.log(self.ai_box, f"AI Analysis failed: {e}", "CRITICAL"))
+                err_msg = f"AI Analysis failed: {e}"
+                self.after(0, lambda msg=err_msg: self.log(self.ai_box, msg, "CRITICAL"))
         
         threading.Thread(target=lambda: asyncio.run(_audit()), daemon=True).start()
 
