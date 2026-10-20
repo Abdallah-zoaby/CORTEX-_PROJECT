@@ -40,18 +40,17 @@ class SafeOperationsTests(unittest.TestCase):
             CortexFixer().harden_windows_services()
         run.assert_not_called()
 
-    def test_persistence_registry_writes_and_cleanup_use_mock(self):
+    def test_training_modules_never_access_registry_files_or_credentials(self):
         from simulation.persist import PersistenceSim
-        import simulation.persist as persistence
-        with patch.object(persistence.winreg, 'OpenKey', return_value=123), \
-                patch.object(persistence.winreg, 'SetValueEx') as write, \
-                patch.object(persistence.winreg, 'DeleteValue') as delete, \
-                patch.object(persistence.winreg, 'CloseKey'), \
-                patch.object(PersistenceSim, 'method_startup_folder', return_value='synthetic'):
-            result = PersistenceSim().attempt_persistence()
-        write.assert_called_once()
-        delete.assert_called_once_with(123, 'Cortex_Security_Test')
-        self.assertIn('Cleanup', result)
+        from simulation.leak import DataLeakSim
+        from simulation.ransom import RansomSim
+        with patch('winreg.OpenKey') as registry, patch('subprocess.check_output') as command, \
+                patch('builtins.open') as opened:
+            results = (PersistenceSim().attempt_persistence(), DataLeakSim().run_simulation(), RansomSim().execute_encryption())
+        registry.assert_not_called()
+        command.assert_not_called()
+        opened.assert_not_called()
+        self.assertTrue(all('[SIMULATION' in result for result in results))
 
     def test_model_helper_requires_local_key_without_network(self):
         import check_models

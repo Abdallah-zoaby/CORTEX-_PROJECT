@@ -2,6 +2,9 @@
 import json
 import logging
 from ..data.types import ScanResult
+from core.privacy import shareable_copy
+from core.findings import normalize
+from html import escape
 
 logger = logging.getLogger("TitaniumScanner")
 
@@ -22,6 +25,7 @@ class ReportGenerator:
     
     def generate(self, scan_result: ScanResult, format: str = 'html', template: str = 'executive'):
         """Generate report"""
+        scan_result = shareable_copy(scan_result)
         if format == 'json':
             return self._generate_json(scan_result)
         elif format == 'html':
@@ -36,6 +40,7 @@ class ReportGenerator:
     def _generate_json(self, scan_result: ScanResult) -> str:
         """Generate JSON report"""
         return json.dumps({
+            'schema_version': 1,
             'scan_id': scan_result.scan_id,
             'target': scan_result.target,
             'start_time': scan_result.start_time.isoformat(),
@@ -46,6 +51,7 @@ class ReportGenerator:
                     'type': vuln.type.value,
                     'severity': vuln.severity.value,
                     'confidence': vuln.confidence,
+                    'confidence_basis': 'detector_score_not_probability',
                     'url': vuln.url,
                     'description': vuln.description,
                     'remediation': vuln.remediation
@@ -53,12 +59,21 @@ class ReportGenerator:
                 for vuln in scan_result.vulnerabilities
             ],
             'summary': scan_result.summary,
-            'tech_stack': scan_result.tech_stack
+            'tech_stack': scan_result.tech_stack,
+            'findings': [normalize(vuln, 'web') for vuln in scan_result.vulnerabilities]
         }, indent=2)
     
     def _generate_html(self, scan_result: ScanResult, template: str) -> str:
         """Generate HTML report"""
         template_func = self.templates.get(template, self._executive_template)
+        # Escape all string fields before interpolation into legacy templates.
+        from dataclasses import fields, is_dataclass
+        for obj in [scan_result] + list(scan_result.vulnerabilities):
+            if is_dataclass(obj):
+                for field in fields(obj):
+                    value = getattr(obj, field.name)
+                    if isinstance(value, str):
+                        setattr(obj, field.name, escape(value))
         return template_func(scan_result)
     
     def _generate_pdf(self, scan_result: ScanResult, template: str) -> bytes:
@@ -75,18 +90,19 @@ class ReportGenerator:
         writer = csv.writer(output)
         
         # Write header
-        writer.writerow(['Type', 'Severity', 'URL', 'Description', 'Confidence', 'CVSS'])
+        writer.writerow(['Type', 'Severity', 'URL', 'Description', 'Detector score (not probability)', 'CVSS (if established)'])
         
         # Write data
         for vuln in scan_result.vulnerabilities:
-            writer.writerow([
+            values = [
                 vuln.type.value,
                 vuln.severity.value,
                 vuln.url,
                 vuln.description[:100],
                 vuln.confidence,
-                vuln.cvss_score
-            ])
+                vuln.cvss_score or 'not established'
+            ]
+            writer.writerow(["'" + value if isinstance(value, str) and value.lstrip().startswith(('=', '+', '-', '@')) else value for value in values])
         
         return output.getvalue()
     
@@ -116,7 +132,7 @@ class ReportGenerator:
             </div>
             
             <div class="summary">
-                <h2>Executive Summary</h2>
+                <h2>Executive Summary</h2><p>Only implemented checks and reachable pages were assessed. No malware clearance or formal compliance certification. Detector confidence scores are not calibrated probabilities. Shared reports omit raw response evidence and known secrets.</p>
                 <p>Scan completed in {scan_result.summary.get('duration', 0):.1f} seconds</p>
                 <p>Vulnerabilities found: {len(scan_result.vulnerabilities)}</p>
                 <p>Critical: {scan_result.summary.get('critical', 0)}</p>
@@ -138,10 +154,16 @@ class ReportGenerator:
         """
     
     def _technical_template(self, scan_result: ScanResult) -> str:
-        return self._executive_template(scan_result)
+        details = ''.join('<section><h3>' + escape(v.type.value) + '</h3><pre>' +
+                          escape(json.dumps(normalize(v, 'web'), indent=2, default=str)) + '</pre></section>'
+                          for v in scan_result.vulnerabilities)
+        return self._executive_template(scan_result).replace('</body>', '<h2>Sanitized technical evidence</h2>' + details + '</body>')
 
     def _developer_template(self, scan_result: ScanResult) -> str:
-        return self._executive_template(scan_result)
+        details = ''.join('<section><h3>' + escape(v.type.value) + '</h3><pre>' +
+                          getattr(v, 'remediation_patch', '') + '</pre><p>' + v.remediation + '</p></section>'
+                          for v in scan_result.vulnerabilities)
+        return self._executive_template(scan_result).replace('</body>', '<h2>Review proposed remediation before applying</h2>' + details + '</body>')
 
     def _compliance_template(self, scan_result: ScanResult) -> str:
-        return self._executive_template(scan_result)
+        return self._executive_template(scan_result).replace('</body>', '<h2>Compliance status: NOT ASSESSED</h2><p>These checks do not establish fulfillment of all controls. Independent scope and control evidence are required.</p></body>')
