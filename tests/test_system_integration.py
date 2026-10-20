@@ -212,6 +212,77 @@ class SystemIntegrationTests(unittest.TestCase):
             with self.subTest(module=name):
                 importlib.import_module(name)
 
+    def test_real_chromium_renders_dynamic_page(self):
+        async def exercise():
+            from aiohttp import web
+
+            async def page(request):
+                return web.Response(text='''<html><body><div id="result"></div>
+                    <script>document.getElementById('result').textContent='dynamic-ready';</script>
+                    </body></html>''', content_type='text/html')
+
+            app = web.Application()
+            app.router.add_get('/', page)
+            runner = web.AppRunner(app)
+            await runner.setup()
+            site = web.TCPSite(runner, '127.0.0.1', 0)
+            await site.start()
+            port = site._server.sockets[0].getsockname()[1]
+            scanner = self.scanner_module.CortexScanner()
+            try:
+                content, _, status = await scanner._fetch_dynamic(f'http://127.0.0.1:{port}/')
+                self.assertEqual(status, 200)
+                self.assertIn('<div id="result">dynamic-ready</div>', content)
+            finally:
+                scanner.db_session.close()
+                await runner.cleanup()
+
+        asyncio.run(exercise())
+
+    def test_full_system_engine_does_not_accumulate_previous_results(self):
+        from engine.cortex import CortexScanner
+        import engine.cortex as system_engine
+        scanner = CortexScanner()
+        with patch.object(system_engine.time, 'sleep'), \
+                patch.object(system_engine.network, 'scan_open_ports', return_value=[(445, 'SMB', 'CRITICAL')]), \
+                patch.object(system_engine.network, 'check_dns_integrity', return_value=[]), \
+                patch.object(system_engine.system, 'scan_running_processes', return_value=[]), \
+                patch.object(system_engine.system, 'scan_scheduled_tasks', return_value=[]), \
+                patch.object(system_engine.forensics, 'scan_suspicious_files', return_value=[]):
+            first = scanner.run_full_scan()
+            second = scanner.run_full_scan()
+        self.assertEqual(len(first.findings), 1)
+        self.assertEqual(len(second.findings), 1)
+        self.assertIsNot(first, second)
+
+    def test_ai_success_invalid_data_and_transport_failure(self):
+        detector = self.scanner_module.AIMLDetector()
+        model = Mock()
+        detector.model = model
+        payload = {'vulnerability': 'SQLi', 'confidence': 0.95,
+                   'severity': 'HIGH', 'reason': 'Synthetic test only'}
+        model.generate_content.return_value = SimpleNamespace(text=json.dumps(payload))
+        finding = asyncio.run(detector.analyze_response('http://127.0.0.1', '<html>test</html>', {}))
+        self.assertEqual(finding.severity, self.scanner_module.SeverityLevel.HIGH)
+        model.generate_content.return_value = SimpleNamespace(text='invalid JSON')
+        self.assertIsNone(asyncio.run(detector.analyze_response('http://127.0.0.1', 'test', {})))
+        model.generate_content.side_effect = RuntimeError('Synthetic transport failure')
+        self.assertIsNone(asyncio.run(detector.analyze_response('http://127.0.0.1', 'test', {})))
+
+    def test_worker_failure_cannot_be_reported_as_completed(self):
+        m = self.scanner_module
+        scanner = m.CortexScanner(m.ScanConfig(target_url='http://127.0.0.1', max_concurrency=1))
+        scanner.plugin_manager.hooks = {}
+        with patch.object(scanner, '_process_url', new=AsyncMock(side_effect=RuntimeError('Synthetic failure'))):
+            with self.assertRaises(RuntimeError):
+                asyncio.run(asyncio.wait_for(scanner.scan(), timeout=5))
+        session = m.Session()
+        try:
+            record = session.query(m.Scan).filter_by(scan_uuid=scanner.scan_id).one()
+            self.assertEqual(record.status, 'FAILED')
+        finally:
+            session.close()
+
 
 if __name__ == '__main__':
     unittest.main()

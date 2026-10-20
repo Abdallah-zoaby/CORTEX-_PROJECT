@@ -20,6 +20,8 @@ class CortexScanner:
         self.risk_engine = RiskEngine()
 
     def run_full_scan(self, ui_callback=None, progress_callback=None):
+        # Each run owns its result; old reports must not grow on subsequent runs.
+        self.risk_engine = RiskEngine()
         def log(msg, lvl="INFO"):
             print(f"[{lvl}] {msg}")
             if ui_callback: ui_callback(msg, lvl)

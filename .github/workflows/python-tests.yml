@@ -9,20 +9,25 @@ on:
 
 jobs:
   test-and-audit:
-    name: Run Automated Tests & Quality Checks
+    name: Windows Python ${{ matrix.python-version }}
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
     env:
       PYTHONUTF8: "1"
       PYTHONIOENCODING: "utf-8"
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.audit_deps/browsers
 
     steps:
       - name: 📥 Check out repository
         uses: actions/checkout@v4
 
-      - name: 🐍 Set up Python 3.11
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
           cache: "pip"
 
       - name: 📦 Install Dependencies
@@ -30,6 +35,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install flake8 pytest
           if (Test-Path "requirements.txt") { pip install -r requirements.txt }
+
+      - name: Install isolated Chromium for dynamic-page tests
+        run: python -m playwright install chromium
 
       - name: 🔍 Lint with Flake8 (Syntax & Undefined Names)
         run: |

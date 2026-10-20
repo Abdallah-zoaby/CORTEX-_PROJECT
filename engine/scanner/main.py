@@ -2099,6 +2099,7 @@ class CortexScanner:
         self.visited_urls = set()
         self.tech_stack = set()
         self.vulnerabilities = []
+        self._worker_errors = []
         self.url_queue = asyncio.PriorityQueue()
         self.plugin_manager = PluginManager()
         self.rate_limiter = SmartRateLimiter(max_rpm=60)
@@ -2204,15 +2205,24 @@ class CortexScanner:
             
         except Exception as e:
             logger.error(f"❌ Scan failed: {e}")
+            try:
+                self.db_session.rollback()
+                if self.scan_record is not None and self.scan_record.id is not None:
+                    self.scan_record.status = 'FAILED'
+                    self.db_session.commit()
+            except Exception:
+                logger.exception('Could not persist failed scan status')
             raise
         finally:
             await self._cleanup()
     
     async def _initialize_scan(self):
         """Initialize scan in database"""
+        self.scan_record = None
         self.visited_urls = set()
         self.tech_stack = set()
         self.vulnerabilities = []
+        self._worker_errors = []
         self.url_queue = asyncio.PriorityQueue()
         for key in ('urls_scanned', 'requests_made', 'vulnerabilities_found',
                     'critical', 'high', 'medium', 'low', 'info'):
@@ -2266,6 +2276,9 @@ class CortexScanner:
                 for worker in workers:
                     worker.cancel()
                 await asyncio.gather(*workers, return_exceptions=True)
+
+        if self._worker_errors:
+            raise RuntimeError(f'{len(self._worker_errors)} URL(s) could not be processed') from self._worker_errors[0]
         
         return vulnerabilities
 
@@ -2290,16 +2303,14 @@ class CortexScanner:
         while True:
             try:
                 priority, url = await self.url_queue.get()
-                
-                # Process URL
-                await self._process_url(url, progress_callback)
-                
-                self.url_queue.task_done()
-                
             except asyncio.CancelledError:
                 break
+            try:
+                await self._process_url(url, progress_callback)
             except Exception as e:
                 logger.error(f"Worker {worker_id} error: {e}")
+                self._worker_errors.append(e)
+            finally:
                 self.url_queue.task_done()
     
     async def _process_url(self, url: str, progress_callback=None):
