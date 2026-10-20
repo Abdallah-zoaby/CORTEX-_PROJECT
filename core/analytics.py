@@ -33,17 +33,26 @@ class AnalyticsState:
     def __init__(self):
         self.sources = {}
         self.live_alerts = {}
+        self.unassessed_sources = set()
 
-    def replace(self, source, findings):
+    def replace(self, source, findings, assessed=True):
+        if assessed:
+            self.unassessed_sources.discard(source)
+        else:
+            self.unassessed_sources.add(source)
         unique = {}
         for finding in findings:
             severity = field(finding, 'severity', 'INFO').upper()
             if severity not in LEVELS:
                 continue
-            key = identity(finding)
+            classification = field(finding, 'classification')
+            eligible = classification not in ('observation', 'unknown', 'configuration_observation')
+            if classification == 'engine_detection' and field(finding, 'activity') != 'active':
+                eligible = False
+            key = identity(finding) + (field(finding, 'path'), field(finding, 'detection_id'))
             previous = unique.get(key)
             if previous is None or LEVELS.index(severity) < LEVELS.index(previous['severity']):
-                unique[key] = {'severity': severity, 'category': category(field(finding, 'type'))}
+                unique[key] = {'severity': severity, 'category': category(field(finding, 'type')), 'eligible': eligible}
         self.sources[source] = unique
 
     def observe(self, alerts):
@@ -54,15 +63,18 @@ class AnalyticsState:
 
     def snapshot(self):
         findings = [finding for source in self.sources.values() for finding in source.values()]
+        observations = sum(not f['eligible'] for f in findings)
+        findings = [f for f in findings if f['eligible']]
         levels = Counter(f['severity'] for f in findings)
         types = Counter(f['category'] for f in findings)
+        assessed = bool(set(self.sources) - self.unassessed_sources)
         risk = min(100, sum(levels[level] * weight for level, weight in (
             ('CRITICAL', 15), ('HIGH', 8), ('MEDIUM', 3), ('LOW', 1))))
         return {
-            'assessed': bool(self.sources),
+            'assessed': assessed,
             'levels': {level: levels[level] for level in LEVELS},
             'types': {name: types[name] for name in CATEGORIES},
-            'total': len(findings), 'live': len(self.live_alerts),
-            'risk': risk if self.sources else None,
-            'posture': 100 - risk if self.sources else None,
+            'total': len(findings), 'observations': observations, 'live': len(self.live_alerts),
+            'risk': risk if assessed else None,
+            'posture': 100 - risk if assessed else None,
         }

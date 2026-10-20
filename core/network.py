@@ -5,9 +5,9 @@ import socket
 
 def scan_open_ports():
     risky_ports = {
-        445: "SMB (WannaCry Risk)", 3389: "RDP (Remote Desktop)",
+        445: "SMB", 3389: "RDP (Remote Desktop)",
         21: "FTP (Unencrypted)", 23: "Telnet (Unsecure)",
-        135: "RPC Endpoint", 53: "DNS Tunneling Risk"
+        135: "RPC Endpoint", 53: "DNS service"
     }
     results = []
     for conn in psutil.net_connections(kind='inet'):
@@ -19,7 +19,7 @@ def scan_open_ports():
                 proc = "Unknown"
 
             if port in risky_ports:
-                results.append((port, f"{proc} -> {risky_ports[port]}", "CRITICAL"))
+                results.append((port, f"{proc} -> {risky_ports[port]} (exposure observation, not malware)", "LOW"))
             else:
                 results.append((port, proc, "INFO"))
     return results
@@ -57,8 +57,10 @@ def check_dns_integrity():
         hosts_path = r"C:\Windows\System32\drivers\etc\hosts"
         with open(hosts_path, 'r') as f:
             content = f.read()
-            if "google.com" in content or "facebook.com" in content or "microsoft.com" in content:
-                issues.append("Hosts file hijacked (Blocking security sites)")
+            for line in content.splitlines():
+                fields = line.split('#', 1)[0].split()
+                if len(fields) > 1 and any(domain in fields[1:] for domain in ('google.com', 'facebook.com', 'microsoft.com')):
+                    issues.append(f'Hosts mapping observed: {" ".join(fields)}; verify intended configuration')
     except:
         pass
     return issues

@@ -2,6 +2,9 @@ import winreg
 import psutil
 import subprocess
 import os
+import csv
+import io
+from .evidence import classify, process_signals
 
 def scan_startup_apps():
     """فحص برامج بدء التشغيل (القديم + تحديثات)"""
@@ -20,13 +23,8 @@ def scan_startup_apps():
                 try:
                     name, value, _ = winreg.EnumValue(key, i)
                     risk = "INFO"
-                    lower_val = value.lower()
                     
-                    # تحليل ذكي: البرامج اللي بتشتغل من AppData أو Temp غالباً فيروسات
-                    if "appdata" in lower_val or "temp" in lower_val:
-                        risk = "HIGH"
-                    elif ".vbs" in lower_val or ".bat" in lower_val or "powershell" in lower_val:
-                        risk = "CRITICAL"
+                    # A writable path or script is context, not proof of malware.
                         
                     suspicious_apps.append({"name": name, "path": value, "risk": risk})
                     i += 1
@@ -37,48 +35,35 @@ def scan_startup_apps():
             pass
     return suspicious_apps
 
-def scan_running_processes():
-    """(جديد) فحص العمليات الشغالة في الرامات حالياً"""
-    suspicious_procs = []
-    for proc in psutil.process_iter(['pid', 'name', 'exe', 'cmdline']):
+def scan_running_processes(inspector=None):
+    """Collect process evidence; optional file inspection is explicit and bounded."""
+    observations = []
+    for proc in psutil.process_iter(['pid', 'name', 'exe', 'cmdline', 'ppid']):
         try:
             p_info = proc.info
-            name = p_info['name']
-            exe_path = p_info['exe'] or ""
-            
-            # 1. فحص العمليات اللي شغالة من أماكن مشبوهة
-            if "AppData" in exe_path or "Temp" in exe_path:
-                suspicious_procs.append({
-                    "pid": p_info['pid'],
-                    "name": name,
-                    "reason": "Running from Temp/AppData",
-                    "severity": "HIGH"
-                })
-            
-            # 2. فحص عمليات الـ Mining (التعدين)
-            if name.lower() in ["xmrig.exe", "minerd.exe", "nicehash.exe"]:
-                suspicious_procs.append({
-                    "pid": p_info['pid'],
-                    "name": name,
-                    "reason": "Crypto Miner Detected",
-                    "severity": "CRITICAL"
-                })
-                
-            # 3. فحص الباور شيل المخفي
-            if name.lower() == "powershell.exe":
-                cmd = p_info['cmdline'] or []
-                if "-w hidden" in str(cmd).lower() or "-enc" in str(cmd).lower():
-                    suspicious_procs.append({
-                        "pid": p_info['pid'],
-                        "name": name,
-                        "reason": "Hidden PowerShell Script",
-                        "severity": "CRITICAL"
-                    })
-
+            p_info = dict(p_info)
+            try:
+                parent = psutil.Process(p_info.get('ppid')) if p_info.get('ppid') else None
+                p_info['parent_name'] = parent.name() if parent else None
+                p_info['parent_path'] = parent.exe() if parent else None
+            except (psutil.Error, OSError):
+                p_info.update(parent_name=None, parent_path=None)
+            if inspector is not None:
+                observation = inspector.inspect_process(p_info)
+            else:
+                observation = classify(process_signals(p_info.get('name'), p_info.get('exe') or '', p_info.get('cmdline')),
+                                       signature_status='NotQueried', inspected=False)
+                observation.update(pid=p_info.get('pid'), name=p_info.get('name') or 'Unknown',
+                                   path=p_info.get('exe'), exe=p_info.get('exe'), cmdline=p_info.get('cmdline'),
+                                   parent_pid=p_info.get('ppid'), parent_name=p_info.get('parent_name'),
+                                   parent_path=p_info.get('parent_path'), type='Process observation',
+                                   source='CORTEX process inventory', inspection_status='metadata_only')
+                observation['reason'] = '; '.join(s['reason'] for s in observation['signals']) or 'Process metadata only; contents not scanned'
+            observations.append(observation)
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             pass
             
-    return suspicious_procs
+    return observations
 
 def scan_scheduled_tasks():
     """(جديد) فحص المهام المجدولة الخبيثة"""
@@ -86,18 +71,12 @@ def scan_scheduled_tasks():
     try:
         # بنستخدم أمر الويندوز عشان نجيب كل المهام
         output = subprocess.check_output('schtasks /query /fo CSV /v', shell=True, encoding='cp850', errors='ignore')
-        lines = output.split('\n')
-        for line in lines:
-            if "TaskName" in line: continue # Skip header
-            
-            # لو المهمة فيها سكريبتات مشبوهة
-            lower_line = line.lower()
-            if ".vbs" in lower_line or ".bat" in lower_line or "powershell" in lower_line:
-                # تنظيف النص لاستخراج الاسم
-                parts = line.split(',')
-                if len(parts) > 0:
-                    task_name = parts[0].replace('"', '')
-                    risky_tasks.append(task_name)
+        for row in csv.DictReader(io.StringIO(output)):
+            text = ' '.join(str(v or '') for v in row.values()).lower()
+            if any(token in text for token in ('.vbs', '.bat', '.ps1', 'powershell')):
+                values = list(row.values())
+                name = row.get('TaskName') or (values[1] if len(values) > 1 else 'Name unavailable')
+                risky_tasks.append(f'Scripted task observation (not a malware verdict): {name}')
     except:
         pass
     return risky_tasks

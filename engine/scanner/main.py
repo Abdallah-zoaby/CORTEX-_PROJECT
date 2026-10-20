@@ -594,7 +594,7 @@ class WindowsForensics:
         }
         
         prompt = f"""
-        You are a Certified Digital Forensics Investigator. Analyze this system snapshot and produce a professional forensic report.
+        Explain the supplied system observations and their limitations. Do not claim professional certification, malware, active compromise or safety from path, CPU, unsigned code or missing data alone. Cite the evidence source; AI output is explanatory only.
         
         System Data:
         {json.dumps(summary_input, indent=2)}
@@ -609,7 +609,7 @@ class WindowsForensics:
         ## 🛡️ التوصيات العاجلة
         (Top 3 immediate action items)
         
-        Be precise and professional. If no issues found, say the system looks clean.
+        Be precise. If no corroborated findings exist, say no active engine detection was supplied; this is not proof of safety. Never invent evidence or recommend automatic deletion.
         """
         try:
             loop = asyncio.get_event_loop()

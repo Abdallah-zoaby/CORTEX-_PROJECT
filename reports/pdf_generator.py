@@ -12,6 +12,7 @@ from bidi.algorithm import get_display
 import time
 import os
 import io
+import json
 from xml.sax.saxutils import escape
 
 # --- ARABIC SUPPORT ---
@@ -45,29 +46,24 @@ def generate_pdf_report(scan_results, simulation_logs='', ai_analysis='', filena
         simulation_logs = ''
         ai_analysis = ''
 
-    if not web_findings and hasattr(scan_results, 'findings'):
-        web_findings = [
-            {
-                'severity': f.get('severity', 'INFO') if isinstance(f, dict) else getattr(f, 'severity', 'INFO'),
-                'type': 'System Finding' if isinstance(f, dict) else getattr(f, 'type', 'System Finding'),
-                'desc': f.get('desc', '') if isinstance(f, dict) else getattr(f, 'desc', str(f)),
-                'url': 'Local Host / OS',
-                'evidence': ''
-            }
-            for f in scan_results.findings
-        ]
-
+    host_findings = list(getattr(scan_results, 'findings', []) or [])
+    raw_findings = host_findings + list(web_findings or [])
+    if not raw_findings:
+        raw_findings = list(getattr(scan_results, 'vulnerabilities', []) or [])
     normalized = []
-    for finding in web_findings or getattr(scan_results, 'vulnerabilities', []):
+    for finding in raw_findings:
         def field(name, default=''):
             value = finding.get(name, default) if isinstance(finding, dict) else getattr(finding, name, default)
-            return str(getattr(value, 'value', value))
+            return str(getattr(value, 'value', value) or '')
+        description = field('desc', field('description', field('reason')))
+        if isinstance(finding, dict) and finding.get('classification'):
+            description += ' | ' + ' / '.join(field(key) for key in ('classification', 'confidence', 'activity'))
         normalized.append({
             'severity': field('severity', 'INFO'),
             'type': field('type', 'System Finding'),
-            'desc': field('desc', field('description')),
-            'url': field('url', 'Local Host / OS'),
-            'evidence': field('evidence'),
+            'desc': description,
+            'url': field('url') or field('path') or field('resource') or 'Local Host / OS',
+            'evidence': json.dumps(finding, ensure_ascii=False, default=str) if isinstance(finding, dict) else field('evidence'),
         })
     web_findings = normalized
 
@@ -81,6 +77,9 @@ def generate_pdf_report(scan_results, simulation_logs='', ai_analysis='', filena
     story.append(Spacer(1, 2*inch))
     story.append(Paragraph("TITANIUM SECURITY AUDIT", style_title))
     story.append(Paragraph(f"Date: {time.strftime('%Y-%m-%d %H:%M:%S')}", style_normal))
+    story.append(Paragraph('Evidence assessment: observations and historical detections do not prove active infection. No safety guarantee.', style_normal))
+    if getattr(scan_results, 'coverage', None):
+        story.append(Paragraph(escape(json.dumps(scan_results.coverage, ensure_ascii=False, default=str)), style_normal))
     if web_findings:
         story.append(Paragraph(f"Total Findings: {len(web_findings)}", style_normal))
     
@@ -143,7 +142,7 @@ def generate_pdf_report(scan_results, simulation_logs='', ai_analysis='', filena
             story.append(Paragraph(escape(f"[{f['severity']}] {f['type']}"), style_normal))
             story.append(Paragraph(escape(f"URL: {f['url']}"), style_code))
             if 'evidence' in f and f['evidence']:
-                 story.append(Paragraph(escape(f"Evidence: {f['evidence'][:500]}"), style_code))
+                 story.append(Paragraph(escape(f"Evidence: {f['evidence']}"), style_code))
             story.append(Spacer(1, 10))
 
     # --- 4. RED TEAM LOGS ---
