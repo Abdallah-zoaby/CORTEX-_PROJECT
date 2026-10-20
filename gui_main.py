@@ -12,6 +12,11 @@ import google.generativeai as genai
 from engine.scanner.main import CortexScanner, ScanConfig, ScanMode, VulnerabilityType, SeverityLevel
 from engine.cortex import CortexScanner as SystemScanner
 from core.analytics import AnalyticsState
+from core.defender import DefenderClient
+from core.evidence import EvidenceInspector
+from core.remediation import open_windows_security
+from tkinter import ttk, filedialog, messagebox
+from datetime import datetime, timezone
 from engine.scanner.main import PortScanner, SubdomainEnumerator, BruteForceEngine, SSLTLSAnalyzer, JSSecretsAnalyzer
 try:
     from simulation.ransom import RansomSim
@@ -252,8 +257,8 @@ class CortexProApp(ctk.CTk):
         self.logo_text.pack()
         
         # Action Buttons
-        self.create_sidebar_btn("⚡ FULL SYSTEM SCAN", self.start_scan_thread, self.colors["accent"], 1)
-        self.create_sidebar_btn("🛡️ AUTO-REMEDIATION", self.run_autofix, "#1f6feb", 2)
+        self.btn_full_scan = self.create_sidebar_btn("⚡ FULL SYSTEM SCAN", self.start_scan_thread, self.colors["accent"], 1)
+        self.create_sidebar_btn("🛡️ REVIEW SECURITY ACTIONS", self.run_autofix, "#1f6feb", 2)
         self.create_sidebar_btn("🧠 AI ANALYST", self.ask_ai_analyst, "#8957e5", 3)
         self.btn_pdf = self.create_sidebar_btn("📄 GENERATE REPORT", self.export_pdf_report, "#b1bad1", 4, state="disabled", fg="#333")
 
@@ -326,6 +331,10 @@ class CortexProApp(ctk.CTk):
         self.vuln_type_count = {"SQLI": 0, "XSS": 0, "LFI": 0, "SENSITIVE": 0, "OTHER": 0}
         self.risk_score = 100
         self.scan_results = None
+        self.evidence_records = []
+        self.evidence_coverage = {}
+        self._security_job_running = False
+        self._system_scan_running = False
         self.web_findings = []
         self.ai_response_text = ""
         self.simulation_logs = ""
@@ -371,7 +380,7 @@ class CortexProApp(ctk.CTk):
             "SCAN: Monitoring background packets", "AUTH: Secure session established",
             "MEM: Analysis of heap memory", "NET: Socket listening on 0.0.0.0"
         ]
-        new_msg = f"> {random.choice(msgs)} [{time.strftime('%H:%M:%S')}]"
+        new_msg = f"> DEMO VISUAL: {random.choice(msgs)} [{time.strftime('%H:%M:%S')}]"
         # Shift
         if hasattr(self, 'activity_lbls') and self.activity_lbls:
             for i in range(len(self.activity_lbls)-1, 0, -1):
@@ -685,33 +694,196 @@ class CortexProApp(ctk.CTk):
         return lbl
 
     def setup_forensics_tab(self):
-        """Advanced Forensic Analysis & Integrity Monitoring"""
+        """Evidence is browsable; no fake kernel/entropy verdicts are generated."""
+        toolbar = ctk.CTkFrame(self.tab_forensics, fg_color='transparent')
+        toolbar.pack(fill='x', padx=10, pady=8)
+        self.evidence_buttons = []
+        for text, command in [('REFRESH DEFENDER', self.refresh_defender),
+                              ('INSPECT FILE', self.inspect_selected_file),
+                              ('DEFENDER SCAN FILE', self.scan_selected_file),
+                              ('WINDOWS SECURITY', self.open_security_review),
+                              ('EXPORT EVIDENCE', self.export_evidence_json)]:
+            button = ctk.CTkButton(toolbar, text=text, command=command, width=130)
+            button.pack(side='left', padx=3)
+            self.evidence_buttons.append(button)
+        self.evidence_status = ctk.CTkLabel(self.tab_forensics,
+            text='No evidence query yet. Full scan is read-only; file scanning is a separate action.', wraplength=950)
+        self.evidence_status.pack(fill='x', padx=10)
+        self.evidence_filter = ctk.CTkOptionMenu(self.tab_forensics,
+            values=['All', 'Engine detections', 'Corroborated suspicion', 'Observations', 'Unknown', 'History'],
+            command=lambda value: self.render_evidence_list())
+        self.evidence_filter.pack(anchor='w', padx=10, pady=5)
+        table_frame = ctk.CTkFrame(self.tab_forensics)
+        table_frame.pack(fill='both', expand=True, padx=10)
+        self.evidence_tree = ttk.Treeview(table_frame,
+            columns=('classification', 'severity', 'confidence', 'path'), show='headings', height=7)
+        for column, label, width in [('classification', 'Assessment / state', 200), ('severity', 'Severity', 80),
+                                      ('confidence', 'Confidence basis', 180), ('path', 'File / resource', 440)]:
+            self.evidence_tree.heading(column, text=label)
+            self.evidence_tree.column(column, width=width, minwidth=70)
+        scrollbar = ttk.Scrollbar(table_frame, orient='vertical', command=self.evidence_tree.yview)
+        self.evidence_tree.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side='right', fill='y')
+        self.evidence_tree.pack(side='left', fill='both', expand=True)
+        self.evidence_tree.bind('<<TreeviewSelect>>', self.show_evidence_detail)
         self.forensic_output = ctk.CTkTextbox(self.tab_forensics, font=("Consolas", 12), fg_color="#0d1117", text_color="#3fb950")
         self.forensic_output.pack(expand=True, fill="both", padx=10, pady=10)
-        self.forensic_output.insert("0.0", "═══ CORTEX FORENSIC ENGINE ONLINE ═══\nMonitoring system calls and process entropy...\n\n")
+        self.forensic_output.insert('0.0', 'Select a record for path, SHA-256, publisher, parent process, evidence and recommended action.\n'
+                                   'Unknown or unsigned is not a malware verdict. Exports contain local paths/process arguments; review before sharing.\n')
 
         btn_frame = ctk.CTkFrame(self.tab_forensics, fg_color="transparent")
         btn_frame.pack(fill="x", padx=10, pady=5)
         
-        ctk.CTkButton(btn_frame, text="🕵️ RUN DEEP SYSTEM FORENSICS", command=self.run_forensic_scan, fg_color="#1f6feb", height=40).pack(side="left", fill="x", expand=True, padx=5)
-        
-        # Real-time event simulation for forensics
-        self._simulate_forensic_noise()
+        ctk.CTkButton(btn_frame, text='COLLECT BOUNDED DESKTOP FILE EVIDENCE', command=self.run_forensic_scan,
+                     fg_color='#1f6feb', height=40).pack(fill='x', padx=5)
 
     def _simulate_forensic_noise(self):
-        """Simulate real-time forensic activity background noise"""
-        events = [
-            "AUDIT: Checking parent process for PID 4829",
-            "FORENSIC: Analyzing heap for suspicious entropy",
-            "FILESYSTEM: Monitoring write events in System32",
-            "REGISTRY: Verifying integrity of HKLM\\RunKeys",
-            "VOLATILE: Scanning pagefile.sys for leaked credentials",
-            "KERNEL: Hooking syscall 0x6E for integrity check"
-        ]
-        if self.tabs.get() == "  🕵️ FORENSICS  ":
-            msg = f"🔍 {random.choice(events)} ... [OK]"
-            self.log(self.forensic_output, msg)
-        self.after(5000, self._simulate_forensic_noise)
+        """Compatibility no-op: synthetic activity is not forensic evidence."""
+        return
+
+    def display_evidence(self, records, coverage=None):
+        self.evidence_records = [dict(record) for record in records]
+        self.evidence_coverage = dict(coverage or {})
+        has_active = any((r.get('classification') == 'engine_detection' and r.get('activity') == 'active')
+                         or r.get('classification') == 'corroborated_suspicion' for r in records)
+        assessed = has_active or (self.evidence_coverage.get('defender_status') == 'available'
+                                  and self.evidence_coverage.get('defender_health', {}).get('AntivirusEnabled') is True)
+        self.analytics.replace('system', self.evidence_records, assessed=assessed)
+        self._refresh_analytics()
+        self.render_evidence_list()
+        self.evidence_status.configure(text=(
+            f"{len(records)} evidence records | Defender: {self.evidence_coverage.get('defender_status', 'not queried')} | "
+            f"Unknown files: {self.evidence_coverage.get('unknown_files', 'not measured')} | "
+            + self.evidence_coverage.get('scope', 'No antivirus clearance inferred from metadata')))
+
+    def render_evidence_list(self):
+        for item in self.evidence_tree.get_children():
+            self.evidence_tree.delete(item)
+        selected = self.evidence_filter.get()
+        for index, record in enumerate(self.evidence_records):
+            label = record.get('classification', 'unknown')
+            activity = record.get('activity')
+            visible = (selected == 'All'
+                       or selected == 'Engine detections' and label == 'engine_detection'
+                       or selected == 'Corroborated suspicion' and label == 'corroborated_suspicion'
+                       or selected == 'Observations' and label in ('observation', 'configuration_observation')
+                       or selected == 'Unknown' and label == 'unknown'
+                       or selected == 'History' and label == 'engine_detection' and activity != 'active')
+            if visible:
+                self.evidence_tree.insert('', 'end', iid=str(index), values=(
+                    label + (f' / {activity}' if activity else ''), record.get('severity', 'INFO'),
+                    record.get('confidence', 'not supplied'), record.get('path') or record.get('resource') or record.get('desc', '')))
+
+    def show_evidence_detail(self, event=None):
+        selected = self.evidence_tree.selection()
+        if not selected:
+            return
+        record = self.evidence_records[int(selected[0])]
+        self.forensic_output.configure(state='normal')
+        self.forensic_output.delete('1.0', 'end')
+        self.forensic_output.insert('end', json.dumps(record, indent=2, ensure_ascii=False))
+        self.forensic_output.configure(state='disabled')
+
+    def _start_security_job(self, worker, complete):
+        if self._security_job_running or self._system_scan_running:
+            self.evidence_status.configure(text='An evidence task is already running; wait for completion.')
+            return
+        self._security_job_running = True
+        for button in self.evidence_buttons:
+            button.configure(state='disabled')
+        self.evidence_status.configure(text='Collecting evidence; no safety verdict until the result is available.')
+
+        def execute():
+            try:
+                result, error = worker(), None
+            except Exception as exc:
+                result, error = None, str(exc)
+
+            def finish():
+                try:
+                    if error:
+                        self.evidence_status.configure(text=f'Evidence unavailable: {error}. Status remains unknown.')
+                    else:
+                        complete(result)
+                finally:
+                    self._security_job_running = False
+                    for button in self.evidence_buttons:
+                        button.configure(state='normal')
+            try:
+                self.after(0, finish)
+            except RuntimeError:
+                pass  # Application was closed while the read-only task was running.
+
+        threading.Thread(target=execute, daemon=True).start()
+
+    def _apply_defender_snapshot(self, snapshot):
+        records = [r for r in self.evidence_records if r.get('source') != 'Microsoft Defender']
+        if snapshot['status'] == 'available':
+            records.extend(snapshot['findings'])
+        else:
+            for previous in self.evidence_records:
+                if previous.get('classification') == 'engine_detection':
+                    records.append(dict(previous, activity='last_known', severity='INFO',
+                        confidence='stale_engine_report',
+                        last_known_activity=previous.get('last_known_activity', previous.get('activity')),
+                        recommended_action='Provider refresh failed; verify current state in Windows Security'))
+            records.append(dict(source='Microsoft Defender', classification='unknown', severity='INFO',
+                confidence='insufficient_data', type='Provider unavailable',
+                desc=snapshot.get('error', 'Defender evidence unavailable'),
+                recommended_action='Open Windows Security and check provider status; absence of data is not safety'))
+        coverage = dict(self.evidence_coverage, defender_status=snapshot['status'],
+                        defender_health=snapshot.get('health', {}), defender_checked_at=snapshot.get('checked_at'))
+        self.display_evidence(records, coverage)
+
+    def refresh_defender(self):
+        self._start_security_job(self.system_scanner.defender_client.snapshot, self._apply_defender_snapshot)
+
+    def inspect_selected_file(self):
+        path = filedialog.askopenfilename(title='Collect local file evidence (no execution)')
+        if path:
+            self._start_security_job(lambda: EvidenceInspector().inspect_file(path),
+                lambda record: self.append_file_evidence([record]))
+
+    def append_file_evidence(self, records):
+        paths = {r.get('path') for r in records}
+        retained = [r for r in self.evidence_records if r.get('type') != 'File evidence' or r.get('path') not in paths]
+        coverage = dict(self.evidence_coverage)
+        coverage.setdefault('scope', 'Selected file metadata only; no antivirus clearance')
+        self.display_evidence(retained + records, coverage)
+
+    def scan_selected_file(self):
+        path = filedialog.askopenfilename(title='Choose one file to scan with Microsoft Defender')
+        if not path:
+            return
+        if not messagebox.askyesno('Defender scan',
+                'Defender may quarantine or remediate this file according to your Windows policy. '
+                'Configured Defender cloud protection may also apply. CORTEX does not change these policies. '
+                'Continue with the selected file scan?'):
+            return
+
+        def complete(result):
+            if result.get('snapshot'):
+                self._apply_defender_snapshot(result['snapshot'])
+            self.evidence_status.configure(text=f"Defender file scan: {result['status']}. "
+                + result.get('error', result.get('note', 'Review Windows Security for the result.')))
+
+        self._start_security_job(lambda: self.system_scanner.defender_client.scan_file(path, consent=True), complete)
+
+    def open_security_review(self):
+        try:
+            open_windows_security()
+            self.log(self.console, 'Windows Security opened for per-detection review, quarantine and restore where supported.', 'INFO')
+        except OSError as exc:
+            self.log(self.console, f'Windows Security could not open: {exc}', 'WARNING')
+
+    def export_evidence_json(self):
+        path = filedialog.asksaveasfilename(title='Export local evidence (review paths/arguments before sharing)',
+                                          defaultextension='.json', filetypes=[('JSON', '*.json')])
+        if path:
+            with open(path, 'w', encoding='utf-8') as output:
+                json.dump({'schema_version': 1, 'generated_at': datetime.now(timezone.utc).isoformat(),
+                           'coverage': self.evidence_coverage, 'findings': self.evidence_records},
+                          output, indent=2, ensure_ascii=False)
 
     def setup_ai_tab(self):
         # AI Chat & News Feed
@@ -786,46 +958,12 @@ class CortexProApp(ctk.CTk):
         threading.Thread(target=_check, daemon=True).start()
 
     def run_forensic_scan(self):
-        """Execute AI-driven forensic analysis + Real File Scan"""
-        self.forensic_output.configure(state="normal")
-        self.forensic_output.delete("0.0", "end")
-        self.log(self.forensic_output, "🕵️ Initiating forensic deep-scan of user directories...", "INFO")
-        
-        def _scan_files():
-            import os
-            suspicious = []
-            target_path = os.path.expanduser("~/Desktop")
-            self.log(self.forensic_output, f"🔍 Scanning: {target_path}")
-            
-            try:
-                for root, dirs, files in os.walk(target_path):
-                    for file in files:
-                        if file.endswith(('.exe', '.dll', '.bat', '.ps1', '.vbs', '.scr')):
-                            suspicious.append(os.path.join(root, file))
-                    if len(suspicious) > 20: break # Limit for demo
-                
-                self.log(self.forensic_output, f"✅ Scan Complete. Found {len(suspicious)} potential entry points.", "SUCCESS")
-                for s in suspicious[:10]:
-                    # Check entropy for breakthrough ransomware detection
-                    try:
-                        with open(s, 'rb') as f:
-                            data = f.read(4096)
-                            ent = calculate_entropy(data)
-                            if ent > 7.5:
-                                self.log(self.forensic_output, f"  [!!!] RANSOMWARE RISK: {s} (Entropy: {ent:.2f})", "CRITICAL")
-                                self.scanner.alerts.trigger("High Entropy File Found", f"Potential encrypted payload: {s}", "CRITICAL")
-                            else:
-                                self.log(self.forensic_output, f"  [!] Suspicious: {s} (Entropy: {ent:.2f})", "WARNING")
-                    except:
-                        self.log(self.forensic_output, f"  [!] Suspicious: {s}", "WARNING")
-                
-                # AI Report
-                self.log(self.forensic_output, "\n🤖 Generating Forensic AI Summary...", "INFO")
-                # (Keep existing AI logic if needed)
-            except Exception as e:
-                self.log(self.forensic_output, f"Scan Error: {e}", "CRITICAL")
-
-        threading.Thread(target=_scan_files, daemon=True).start()
+        from core.forensics import scan_suspicious_files
+        target = os.path.expanduser('~/Desktop')
+        self._start_security_job(
+            lambda: scan_suspicious_files(target, max_files=15),
+            self.append_file_evidence,
+        )
 
     def setup_enterprise_tab(self):
         """🏢 CORPORATE SOC: Asset Management & Compliance Auditor"""
@@ -953,10 +1091,8 @@ class CortexProApp(ctk.CTk):
             self.log(self.comp_box, f"  - PERSISTENCE RISK: {t}", "WARNING")
             
         # Update Compliance Score
-        comp_score = max(0, 100 - (len(dns) * 20 + serious_assets * 5 + len(tasks) * 2))
-        self.stat_compliance.configure(text=f"{comp_score}/100")
-        network_risk = min(100, len(dns) * 20 + sum(15 for _, _, severity in ports if severity == 'CRITICAL'))
-        self.gauge_network.set_value(network_risk)
+        self.stat_compliance.configure(text='N/A')
+        self.gauge_network.set_value(None)
         findings = [dict(severity=p['severity'], type='System observation',
                          item=f"{p['pid']}:{p['reason']}") for p in procs]
         findings += [dict(severity='HIGH', type='Startup risk', item=s['path'])
@@ -965,22 +1101,24 @@ class CortexProApp(ctk.CTk):
                      for port, desc, severity in ports if severity != 'INFO']
         findings += [dict(severity='HIGH', type='DNS integrity', item=item) for item in dns]
         findings += [dict(severity='HIGH', type='Scheduled task', item=item) for item in tasks]
+        for finding in findings:
+            finding.update(classification='configuration_observation', confidence='context_only', severity='INFO')
         self._set_analytics_findings('enterprise', findings)
 
         self.btn_ent_audit.configure(state="normal", text="🚀 RUN CORPORATE AUDIT")
         self._update_risk_score()
-        self.log(self.console, "Enterprise Audit Complete. Risk score updated.", "SUCCESS")
+        self.log(self.console, 'Configuration inventory complete; no compliance or network-infection verdict was inferred.', 'INFO')
 
     def monitor_behavior(self):
         """Live Behavioral Threat Hunting Loop"""
         threats = self.behavior_engine.find_suspicious_processes()
         for threat in self.analytics.observe(threats):
-            msg = f"🛡️ BEHAVIORAL ALERT: {threat['details']} (PROC: {threat['source']})"
-            self.log(self.console, msg, "CRITICAL" if threat['severity'] == "CRITICAL" else "WARNING")
+            msg = f"LIVE OBSERVATION: {threat['details']} (PROC: {threat['source']})"
+            self.log(self.console, msg, threat.get('severity', 'INFO'))
             
             # Specifically for Dashboard
             if hasattr(self, 'activity_lbls'):
-                self.activity_lbls[0].configure(text=f"! ALERT: {threat['details']}", text_color=self.colors["danger"])
+                self.activity_lbls[0].configure(text=f"OBSERVATION: {threat['details']}", text_color=self.colors['text'])
 
         self._refresh_analytics()
 
@@ -1082,7 +1220,7 @@ class CortexProApp(ctk.CTk):
         
         # Add Global Simulation first
         global_events = self.scanner.threat_intel.get_global_threats()
-        self.news_box.insert("end", "🌍 [LIVE GLOBAL THREAT FEED]\n", "accent")
+        self.news_box.insert("end", "🌍 [SIMULATED GLOBAL EVENTS]\n", "accent")
         for ev in global_events:
             self.news_box.insert("end", f"[{ev['timestamp']}] {ev['source']} -> {ev['type']} ({ev['severity']})\n")
         self.news_box.insert("end", "\n" + "═"*40 + "\n\n")
@@ -1226,11 +1364,15 @@ class CortexProApp(ctk.CTk):
         self.gauge_threat.set_value(state['risk'])
         self.gauge_health.set_value(state['posture'])
         assessment = 'No audit yet' if not state['assessed'] else 'Latest audit snapshots; index is not a probability'
-        self.analytics_status.configure(text=f"{assessment} | Live heuristic alerts: {state['live']} (unconfirmed)")
+        self.analytics_status.configure(text=f"{assessment} | Live heuristic alerts: {state['live']} (unconfirmed) | Context/history records: {state['observations']}")
         self.render_charts()
 
     # --- MAIN SCAN ---
     def start_scan_thread(self):
+        if self._system_scan_running or self._security_job_running:
+            return
+        self._system_scan_running = True
+        self.btn_full_scan.configure(state='disabled', text='COLLECTING EVIDENCE...')
         self.progress_bar.set(0)
         threading.Thread(target=self.run_engine, daemon=True).start()
 
@@ -1245,15 +1387,19 @@ class CortexProApp(ctk.CTk):
             )
 
             def complete():
-                self._set_analytics_findings('system', self.scan_results.findings)
-                self.log(self.console, "Scan Complete. Triggering AI Analysis...", "SUCCESS")
+                self.display_evidence(self.scan_results.findings, getattr(self.scan_results, 'coverage', {}))
+                self.log(self.console, 'Evidence collection complete. Review unknowns and coverage; AI explanation is optional.', 'INFO')
                 self.btn_pdf.configure(state="normal", fg_color="#3fb950")
-                self.ask_ai_analyst()
 
             self.after(0, complete)
         except Exception as e:
             self.after(0, lambda message=str(e): self.log(
                 self.console, f"Critical Error: {message}", "CRITICAL"))
+        finally:
+            def reset():
+                self._system_scan_running = False
+                self.btn_full_scan.configure(state='normal', text='⚡ FULL SYSTEM SCAN')
+            self.after(0, reset)
 
     # --- WEB SCAN ---
     def start_web_scan(self):
@@ -1349,6 +1495,8 @@ class CortexProApp(ctk.CTk):
             }
             
             prompt = f"""
+            Explain only supplied evidence. Never infer infection or safety from a path, unsigned status or missing data.
+            Do not invent detections or recommend automatic deletion. Your explanation cannot change the recorded classifications.
             أنت {persona} خبير في الأمن السيبراني. قم بتحليل حالة النظام التالية وقدم تقريراً استراتيجياً باللغة العربية:
             
             سياق النظام:
@@ -1489,7 +1637,7 @@ class CortexProApp(ctk.CTk):
             self.attack_map.animate_attack()
             # Push a simulated log to the console too
             ev = self.scanner.threat_intel.get_global_threats()[0]
-            self.log(self.console, f"INTERCEPTED: {ev['type']} from {ev['source']}", "WARNING")
+            self.log(self.console, f"SIMULATION VISUAL: {ev['type']} from {ev['source']}", "WARNING")
         
         self.after(5000, self.simulate_map_activity)
 
@@ -1520,11 +1668,12 @@ class CortexProApp(ctk.CTk):
         self.log(self.sim_console, res)
 
     def run_autofix(self):
-        threading.Thread(target=self._execute_fix, daemon=True).start()
+        self.tabs.set('  🕵️ FORENSICS  ')
+        self.refresh_defender()
 
     def _execute_fix(self):
-        fixer = CortexFixer()
-        self.log(self.console, "Initiating Auto-Remediation...", "FIX")
+        fixer = CortexFixer(self.system_scanner.defender_client)
+        self.log(self.console, 'Reviewing Defender evidence; no automatic remediation is performed.', 'INFO')
         log = fixer.run_full_fix()
         for line in log.split('\n'):
             if line: self.log(self.console, line)

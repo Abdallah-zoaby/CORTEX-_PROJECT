@@ -1,47 +1,46 @@
-# engine/scorer.py
+"""Evidence-aware summary; numerical severity never proves compromise."""
+
 
 class RiskEngine:
     def __init__(self):
         self.total_score = 0
         self.findings = []
+        self.coverage = {}
+        self._identities = set()
 
-    def add_finding(self, description, severity):
-        """
-        severity:
-        - LOW = 5 points
-        - MEDIUM = 15 points
-        - HIGH = 30 points
-        - CRITICAL = 50 points
-        """
-        points = 0
-        color = "BLACK"
-        
-        if severity == "LOW":
-            points = 5
-            color = "GREEN"
-        elif severity == "MEDIUM":
-            points = 15
-            color = "ORANGE"
-        elif severity == "HIGH":
-            points = 30
-            color = "RED"
-        elif severity == "CRITICAL":
-            points = 50
-            color = "DARKRED"
+    def add_finding(self, description, severity, **evidence):
+        classification = evidence.get('classification', 'observation')
+        if classification in ('observation', 'unknown', 'configuration_observation'):
+            severity = 'INFO'
+        if classification == 'engine_detection' and evidence.get('activity') != 'active':
+            severity = 'INFO'
+        key = tuple(str(evidence.get(k, '')) for k in (
+            'source', 'classification', 'path', 'pid', 'threat_id', 'detection_id')) + (description,)
+        if key in self._identities:
+            return
+        self._identities.add(key)
+        record = dict(evidence)
+        record.update(desc=description, severity=severity,
+                      color={'CRITICAL': 'DARKRED', 'HIGH': 'RED', 'MEDIUM': 'ORANGE',
+                             'LOW': 'GREEN'}.get(severity, 'BLACK'))
+        self.total_score += {'CRITICAL': 50, 'HIGH': 30, 'MEDIUM': 15, 'LOW': 5}.get(severity, 0)
+        self.findings.append(record)
 
-        self.total_score += points
-        self.findings.append({
-            "desc": description,
-            "severity": severity,
-            "color": color
-        })
+    def add_evidence(self, record):
+        record = dict(record)
+        description = record.pop('desc', None) or record.get('reason') or record.get('reasons') or 'Evidence observation'
+        severity = record.pop('severity', 'INFO')
+        self.add_finding(description, severity, **record)
 
     def get_verdict(self):
-        if self.total_score == 0:
-            return "CLEAN SYSTEM 🛡️", "GREEN"
-        elif self.total_score < 40:
-            return f"LOW RISK (Score: {self.total_score}) ⚠️", "ORANGE"
-        elif self.total_score < 80:
-            return f"HIGH RISK (Score: {self.total_score}) 🚨", "RED"
-        else:
-            return f"SYSTEM COMPROMISED (Score: {self.total_score}) 💀", "DARKRED"
+        if any(f.get('classification') == 'engine_detection' and f.get('activity') == 'active'
+               for f in self.findings):
+            return 'ACTIVE DETECTIONS REPORTED BY DEFENDER - review Windows Security', 'RED'
+        if any(f.get('classification') == 'corroborated_suspicion' for f in self.findings):
+            return 'CORROBORATED INDICATORS - investigation required', 'ORANGE'
+        if (self.coverage.get('defender_status') != 'available'
+                or self.coverage.get('defender_health', {}).get('AntivirusEnabled') is not True
+                or self.coverage.get('unknown_files', 0)
+                or any(self.coverage.get(key) for key in ('process_error', 'configuration_error', 'file_errors'))):
+            return 'INCOMPLETE VERIFICATION - unknowns remain; no safety verdict', 'ORANGE'
+        return 'NO ACTIVE ENGINE DETECTIONS REPORTED - not a guarantee of safety', 'GREEN'

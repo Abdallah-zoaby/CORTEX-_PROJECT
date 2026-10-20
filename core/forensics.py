@@ -1,80 +1,41 @@
-import subprocess
-import os
+"""Bounded file evidence collection; no fabricated malware hash database."""
 import hashlib
+import os
+from .evidence import EvidenceInspector
+from .windows_security import signatures
 
-# قاعدة بيانات مصغرة لأشهر الفيروسات (للتجربة)
-# في الواقع ممكن نربط ده بـ VirusTotal API
-KNOWN_MALWARE_HASHES = [
-    "44d88612fea8a8f36de82e1278abb02f", # EICAR Test File
-    "5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8" # Wannacry
-]
 
 def get_file_hash(file_path):
-    """حساب بصمة الملف SHA256"""
-    sha256_hash = hashlib.sha256()
+    digest = hashlib.sha256()
     try:
-        with open(file_path, "rb") as f:
-            for byte_block in iter(lambda: f.read(4096), b""):
-                sha256_hash.update(byte_block)
-        return sha256_hash.hexdigest()
-    except:
+        with open(file_path, 'rb') as stream:
+            for block in iter(lambda: stream.read(128 * 1024), b''):
+                digest.update(block)
+        return digest.hexdigest()
+    except OSError:
         return None
 
+
 def check_digital_signature(file_path):
-    """فحص التوقيع الرقمي باستخدام PowerShell"""
-    if not file_path.lower().endswith(('.exe', '.dll')):
-        return False
-    try:
-        cmd = f'Get-AuthenticodeSignature "{file_path}" | Select-Object -ExpandProperty Status'
-        result = subprocess.check_output(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", cmd], text=True, stderr=subprocess.DEVNULL, timeout=2).strip()
-        return "Valid" in result
-    except:
-        return False
+    path = os.path.abspath(os.fspath(file_path))
+    result = signatures([path]).get(os.path.normcase(path), {})
+    return result.get('status') == 'Valid'
 
-def scan_suspicious_files(directory, max_files=15):
-    suspicious_files = []
-    extensions = ('.exe', '.bat', '.ps1', '.vbs', '.dll')
-    ignore_dirs = {'node_modules', '.git', 'venv', '.venv', '__pycache__', '.idea', '.vscode', 'cache', 'code cache', 'gpu_cache'}
-    
-    print(f"      [DEBUG] Deep scanning: {directory}")
-    checked = 0
-    for root, dirs, files in os.walk(directory):
-        dirs[:] = [d for d in dirs if not d.startswith('.') and d.lower() not in ignore_dirs]
-        if checked >= max_files:
-            dirs.clear()
-            break
-        for file in files:
-            if file.lower().endswith(extensions):
-                full_path = os.path.join(root, file)
-                checked += 1
-                
-                # 1. فحص التوقيع
-                is_signed = check_digital_signature(full_path)
-                
-                # 2. حساب الهاش
-                file_hash = get_file_hash(full_path)
-                
-                risk_reason = []
-                severity = "INFO"
 
-                if not is_signed:
-                    risk_reason.append("Unsigned Executable")
-                    severity = "HIGH"
-                
-                if file_hash in KNOWN_MALWARE_HASHES:
-                    risk_reason.append("KNOWN MALWARE HASH MATCH 💀")
-                    severity = "CRITICAL"
+def scan_suspicious_files(directory, max_files=15, inspector=None):
+    """Compatibility name: returns observations, including explicit unknowns.
 
-                if risk_reason:
-                    suspicious_files.append({
-                        "path": full_path,
-                        "reasons": ", ".join(risk_reason),
-                        "hash": file_hash,
-                        "severity": severity
-                    })
-                
-                if checked >= max_files:
-                    dirs.clear()
-                    break
-                    
-    return suspicious_files
+    This is a bounded sample, not a full-volume antivirus scan.
+    """
+    inspector = inspector or EvidenceInspector()
+    results = []
+    ignored = {'node_modules', '.git', 'venv', '.venv', '__pycache__', '.audit_deps',
+               'cache', 'code cache', 'gpu_cache'}
+    for root, dirs, files in os.walk(directory, followlinks=False):
+        dirs[:] = sorted(d for d in dirs if d.lower() not in ignored and not d.startswith('.'))
+        for name in sorted(files):
+            if len(results) >= max_files:
+                return results
+            if name.lower().endswith(('.exe', '.dll', '.bat', '.ps1', '.vbs')):
+                results.append(inspector.inspect_file(os.path.join(root, name)))
+    return results

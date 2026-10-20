@@ -195,6 +195,41 @@ class SystemIntegrationTests(unittest.TestCase):
                 with patch.object(app.scanner.alerts, 'trigger'):
                     app._on_intrusion_detected('CRITICAL', 'Synthetic simulation')
                 self.assertEqual(app.gauge_threat.value, 3)
+                app.analytics.sources.pop('web', None)
+                active = dict(type='Defender detection', source='Microsoft Defender',
+                              classification='engine_detection', confidence='engine_reported', activity='active',
+                              severity='HIGH', path=r'C:\synthetic-only.exe', detection_id='test-detection',
+                              threat_name='Synthetic test only', action_status='detected', desc='Synthetic engine detection')
+                coverage = dict(defender_status='available', defender_health={'AntivirusEnabled': True},
+                                scope='Synthetic GUI fixture')
+                app.display_evidence([active], coverage)
+                self.assertEqual(len(app.evidence_tree.get_children()), 1)
+                app.evidence_tree.selection_set('0')
+                app.show_evidence_detail()
+                detail = json.loads(app.forensic_output.get('1.0', 'end'))
+                self.assertEqual(detail['confidence'], 'engine_reported')
+                app.append_file_evidence([dict(type='File evidence', classification='observation',
+                    severity='INFO', confidence='weak_indicators', path=r'C:\benign.exe')])
+                self.assertEqual(app.findings_count['HIGH'], 1)
+                self.assertEqual(len(app.evidence_records), 2)
+                app.evidence_filter.set('History')
+                app.render_evidence_list()
+                self.assertEqual(len(app.evidence_tree.get_children()), 0)
+                app.evidence_filter.set('All')
+                app._apply_defender_snapshot(dict(status='unavailable', error='Synthetic permission failure'))
+                self.assertEqual(app.findings_count['HIGH'], 0)
+                self.assertIsNone(app.gauge_threat.value)
+                with patch.object(self.gui.filedialog, 'askopenfilename', return_value=r'C:\benign.txt'), \
+                        patch.object(self.gui.messagebox, 'askyesno', return_value=False), \
+                        patch.object(app.system_scanner.defender_client, 'scan_file') as scan:
+                    app.scan_selected_file()
+                    scan.assert_not_called()
+                exported = Path(self.folder.name) / 'evidence.json'
+                with patch.object(self.gui.filedialog, 'asksaveasfilename', return_value=str(exported)):
+                    app.export_evidence_json()
+                exported_data = json.loads(exported.read_text(encoding='utf-8'))
+                self.assertEqual(exported_data['schema_version'], 1)
+                self.assertEqual(exported_data['findings'], app.evidence_records)
             finally:
                 app.scanner.db_session.close()
                 app.destroy()
@@ -213,6 +248,21 @@ class SystemIntegrationTests(unittest.TestCase):
             output = Path(self.folder.name) / f'{label}.pdf'
             generate_pdf_report(result, filename=str(output), web_findings=findings)
             self.assertTrue(output.read_bytes().startswith(b'%PDF-'))
+
+    def test_pdf_keeps_host_and_web_evidence_with_confidence_and_coverage(self):
+        from pypdf import PdfReader
+        from reports.pdf_generator import generate_pdf_report
+        from engine.scorer import RiskEngine
+        result = RiskEngine()
+        result.coverage = {'defender_status': 'unavailable', 'scope': 'Synthetic bounded sample'}
+        result.add_finding('Host observation', 'HIGH', type='File evidence', classification='observation',
+                           confidence='weak_indicators', path=r'C:\fixture.exe', sha256='a' * 64)
+        output = Path(self.folder.name) / 'combined-evidence.pdf'
+        generate_pdf_report(result, filename=str(output), web_findings=[
+            dict(type='Web test finding', severity='MEDIUM', desc='Web fixture', url='http://127.0.0.1')])
+        text = '\n'.join(page.extract_text() for page in PdfReader(output).pages)
+        for expected in ('Host observation', 'Web fixture', 'weak_indicators', 'unavailable', 'sha256'):
+            self.assertIn(expected, text)
 
     def test_all_project_modules_import_without_running_actions(self):
         modules = [
@@ -262,9 +312,10 @@ class SystemIntegrationTests(unittest.TestCase):
     def test_full_system_engine_does_not_accumulate_previous_results(self):
         from engine.cortex import CortexScanner
         import engine.cortex as system_engine
-        scanner = CortexScanner()
-        with patch.object(system_engine.time, 'sleep'), \
-                patch.object(system_engine.network, 'scan_open_ports', return_value=[(445, 'SMB', 'CRITICAL')]), \
+        defender = Mock()
+        defender.snapshot.return_value = dict(status='available', health={'AntivirusEnabled': True}, findings=[])
+        scanner = CortexScanner(defender_client=defender)
+        with patch.object(system_engine.network, 'scan_open_ports', return_value=[(445, 'SMB', 'CRITICAL')]), \
                 patch.object(system_engine.network, 'check_dns_integrity', return_value=[]), \
                 patch.object(system_engine.system, 'scan_running_processes', return_value=[]), \
                 patch.object(system_engine.system, 'scan_scheduled_tasks', return_value=[]), \

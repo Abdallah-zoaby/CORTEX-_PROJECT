@@ -7,7 +7,7 @@ from unittest.mock import Mock, patch
 
 
 class SafeOperationsTests(unittest.TestCase):
-    def test_remediation_deletes_only_matching_synthetic_files(self):
+    def test_remediation_preserves_even_suspiciously_named_files(self):
         from core.remediation import CortexFixer
         with tempfile.TemporaryDirectory(prefix='cortex-remediation-') as folder:
             root = Path(folder)
@@ -21,25 +21,24 @@ class SafeOperationsTests(unittest.TestCase):
             with patch('core.remediation.os.path.expanduser', return_value=str(root)), \
                     patch.dict(os.environ, {'APPDATA': str(root)}):
                 CortexFixer().remove_malicious_files()
-            self.assertFalse(canary.exists())
-            self.assertFalse(locked.exists())
+            self.assertTrue(canary.exists())
+            self.assertTrue(locked.exists())
             self.assertEqual(keep.read_text(encoding='utf-8'), 'synthetic test data')
 
     def test_process_remediation_preserves_unmatched_process(self):
         from core.remediation import CortexFixer
         bad, good = Mock(), Mock()
         bad.info, good.info = {'name': 'xmrig.exe'}, {'name': 'safe.exe'}
-        with patch('core.remediation.psutil.process_iter', return_value=[bad, good]):
+        with patch('psutil.process_iter', return_value=[bad, good]):
             CortexFixer().kill_bad_processes()
-        bad.kill.assert_called_once()
+        bad.kill.assert_not_called()
         good.kill.assert_not_called()
 
     def test_service_commands_do_not_execute_on_host(self):
         from core.remediation import CortexFixer
-        with patch('core.remediation.subprocess.run') as run:
+        with patch('subprocess.run') as run:
             CortexFixer().harden_windows_services()
-        self.assertEqual(run.call_count, 6)
-        self.assertTrue(all(call.args[0].startswith('sc ') for call in run.call_args_list))
+        run.assert_not_called()
 
     def test_persistence_registry_writes_and_cleanup_use_mock(self):
         from simulation.persist import PersistenceSim
