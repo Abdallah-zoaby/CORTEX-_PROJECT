@@ -11,6 +11,8 @@ import arabic_reshaper
 from bidi.algorithm import get_display
 import time
 import os
+import io
+from xml.sax.saxutils import escape
 
 # --- ARABIC SUPPORT ---
 try:
@@ -43,7 +45,7 @@ def generate_pdf_report(scan_results, simulation_logs='', ai_analysis='', filena
         simulation_logs = ''
         ai_analysis = ''
 
-    if web_findings is None and hasattr(scan_results, 'findings'):
+    if not web_findings and hasattr(scan_results, 'findings'):
         web_findings = [
             {
                 'severity': f.get('severity', 'INFO') if isinstance(f, dict) else getattr(f, 'severity', 'INFO'),
@@ -54,6 +56,20 @@ def generate_pdf_report(scan_results, simulation_logs='', ai_analysis='', filena
             }
             for f in scan_results.findings
         ]
+
+    normalized = []
+    for finding in web_findings or getattr(scan_results, 'vulnerabilities', []):
+        def field(name, default=''):
+            value = finding.get(name, default) if isinstance(finding, dict) else getattr(finding, name, default)
+            return str(getattr(value, 'value', value))
+        normalized.append({
+            'severity': field('severity', 'INFO'),
+            'type': field('type', 'System Finding'),
+            'desc': field('desc', field('description')),
+            'url': field('url', 'Local Host / OS'),
+            'evidence': field('evidence'),
+        })
+    web_findings = normalized
 
     ai_analysis = ai_analysis or ''
     simulation_logs = simulation_logs or ''
@@ -97,7 +113,7 @@ def generate_pdf_report(scan_results, simulation_logs='', ai_analysis='', filena
     story.append(Paragraph(make_arabic("1. الملخص التنفيذي"), style_h1))
     for line in ai_analysis.split('\n'):
         if line.strip():
-            story.append(Paragraph(make_arabic(line), style_arabic))
+            story.append(Paragraph(escape(make_arabic(line)), style_arabic))
     story.append(PageBreak())
 
     # --- 3. TECHNICAL FINDINGS (TABLE) ---
@@ -106,7 +122,7 @@ def generate_pdf_report(scan_results, simulation_logs='', ai_analysis='', filena
     if web_findings:
         data = [['Severity', 'Type', 'Description']]
         for f in web_findings:
-            data.append([f['severity'], Paragraph(f['type'], style_normal), Paragraph(f['desc'], style_normal)])
+            data.append([f['severity'], Paragraph(escape(f['type']), style_normal), Paragraph(escape(f['desc']), style_normal)])
         
         t = Table(data, colWidths=[80, 150, 300])
         t.setStyle(TableStyle([
@@ -124,10 +140,10 @@ def generate_pdf_report(scan_results, simulation_logs='', ai_analysis='', filena
         # Evidence Section
         story.append(Paragraph("3. Detailed Evidence", style_h1))
         for f in web_findings:
-            story.append(Paragraph(f"[{f['severity']}] {f['type']}", style_normal))
-            story.append(Paragraph(f"URL: {f['url']}", style_code))
+            story.append(Paragraph(escape(f"[{f['severity']}] {f['type']}"), style_normal))
+            story.append(Paragraph(escape(f"URL: {f['url']}"), style_code))
             if 'evidence' in f and f['evidence']:
-                 story.append(Paragraph(f"Evidence: {f['evidence'][:500]}", style_code))
+                 story.append(Paragraph(escape(f"Evidence: {f['evidence'][:500]}"), style_code))
             story.append(Spacer(1, 10))
 
     # --- 4. RED TEAM LOGS ---
@@ -136,6 +152,13 @@ def generate_pdf_report(scan_results, simulation_logs='', ai_analysis='', filena
     if simulation_logs:
         for line in simulation_logs.split('\n'):
             line = line.replace("❌", "[X]").replace("✅", "[OK]").replace("⚠️", "[!]").replace("🚀", ">>")
-            story.append(Paragraph(line, style_code))
+            story.append(Paragraph(escape(line), style_code))
 
     doc.build(story)
+
+
+def generate_scan_pdf_bytes(scan_result):
+    """Generate a real PDF using the project's existing ReportLab dependency."""
+    output = io.BytesIO()
+    generate_pdf_report(scan_result, filename=output)
+    return output.getvalue()

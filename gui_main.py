@@ -10,6 +10,7 @@ import aiohttp
 import math
 import google.generativeai as genai
 from engine.scanner.main import CortexScanner, ScanConfig, ScanMode, VulnerabilityType, SeverityLevel
+from engine.cortex import CortexScanner as SystemScanner
 from engine.scanner.main import PortScanner, SubdomainEnumerator, BruteForceEngine, SSLTLSAnalyzer, JSSecretsAnalyzer
 try:
     from simulation.ransom import RansomSim
@@ -326,6 +327,7 @@ class CortexProApp(ctk.CTk):
         self.ai_response_text = ""
         self.simulation_logs = ""
         self.scanner = CortexScanner(ScanConfig(target_url=""))
+        self.system_scanner = SystemScanner()
         self.behavior_engine = BehavioralEngine()
         self.digital_twin = DigitalTwinTarget()
         
@@ -1221,19 +1223,24 @@ class CortexProApp(ctk.CTk):
         threading.Thread(target=self.run_engine, daemon=True).start()
 
     def run_engine(self):
-        self.log(self.console, "Starting Full Protocol...", "INFO")
+        self.after(0, lambda: self.log(self.console, "Starting Full Protocol...", "INFO"))
         try:
-            # استخدام المثيل الموجود بدلاً من إنشاء واحد جديد غير معرف
-            import asyncio
-            self.scan_results = asyncio.run(self.scanner.scan())
-            self.log(self.console, "Scan Complete. Triggering AI Analysis...", "SUCCESS")
-            self.btn_pdf.configure(state="normal", fg_color="#3fb950")
-            
-            # Auto-trigger AI
-            self.ask_ai_analyst()
-            
+            self.scan_results = self.system_scanner.run_full_scan(
+                ui_callback=lambda message, level: self.after(
+                    0, lambda: self.log(self.console, message, level)),
+                progress_callback=lambda value: self.after(
+                    0, lambda: self.progress_bar.set(value)),
+            )
+
+            def complete():
+                self.log(self.console, "Scan Complete. Triggering AI Analysis...", "SUCCESS")
+                self.btn_pdf.configure(state="normal", fg_color="#3fb950")
+                self.ask_ai_analyst()
+
+            self.after(0, complete)
         except Exception as e:
-            self.log(self.console, f"Critical Error: {e}", "CRITICAL")
+            self.after(0, lambda message=str(e): self.log(
+                self.console, f"Critical Error: {message}", "CRITICAL"))
 
     # --- WEB SCAN ---
     def start_web_scan(self):
@@ -1252,18 +1259,18 @@ class CortexProApp(ctk.CTk):
         threading.Thread(target=self._run_web_engine, args=(url, mode), daemon=True).start()
 
     def _run_web_engine(self, url, mode):
-        self.scanner.config.target_url = url
-        self.scanner.config.mode = ScanMode[mode]
-        
-        self.web_ai_panel.configure(state="normal")
-        self.web_ai_panel.insert("end", f"🚀 Target: {url}\n")
-        self.web_ai_panel.configure(state="disabled")
-
-        async def _async_scan():
-            # Clear previous map and findings
+        def prepare():
+            self.web_ai_panel.configure(state="normal")
+            self.web_ai_panel.insert("end", f"🚀 Target: {url}\n")
+            self.web_ai_panel.configure(state="disabled")
             self.map_nodes = {}
             self.map_canvas.delete("all")
-            self.update_network_map(url) # Initial Target Node
+            self.update_network_map(url)
+
+        async def _async_scan():
+            self.scanner.config.target_url = url
+            self.scanner.config.mode = ScanMode[mode]
+            self.after(0, prepare)
 
             # Update map on each processed URL
             def _url_cb(u):
@@ -1271,11 +1278,18 @@ class CortexProApp(ctk.CTk):
                 self.after(0, lambda: self.log(self.web_console, f"Processing: {u}"))
             
             # Custom callback logic (In a real app, you'd add hooks to the scanner)
-            self.web_findings = await self.scanner.scan(progress_callback=_url_cb)
-            self.after(0, lambda: self.btn_web_scan.configure(state="normal", text="🚀 LAUNCH AUDIT"))
+            result = await self.scanner.scan(progress_callback=_url_cb)
+            self.web_findings = result.vulnerabilities
             self.after(0, self.analyze_web_findings)
 
-        threading.Thread(target=lambda: asyncio.run(_async_scan()), daemon=True).start()
+        try:
+            asyncio.run(_async_scan())
+        except Exception as exc:
+            self.after(0, lambda message=str(exc): self.log(
+                self.web_console, f"Web scan failed: {message}", "CRITICAL"))
+        finally:
+            self.after(0, lambda: self.btn_web_scan.configure(
+                state="normal", text="🚀 LAUNCH AUDIT"))
 
     def analyze_web_findings(self):
         if not self.web_findings: 

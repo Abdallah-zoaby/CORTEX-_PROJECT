@@ -91,6 +91,7 @@ def run_qa():
         print("[PASS] QA PASSED: ALL SYSTEMS NOMINAL")
     else:
         print(f"[FAIL] QA FAILED: {errors} MODULES ENCOUNTERED ERRORS")
+    return errors
 
 if __name__ == "__main__":
-    run_qa()
+    sys.exit(1 if run_qa() else 0)
