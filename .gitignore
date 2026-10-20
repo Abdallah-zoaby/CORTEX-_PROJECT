@@ -55,3 +55,6 @@ htmlcov/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Local dependencies used only for audit and regression tests
+.audit_deps/

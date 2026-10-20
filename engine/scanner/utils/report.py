@@ -63,9 +63,8 @@ class ReportGenerator:
     
     def _generate_pdf(self, scan_result: ScanResult, template: str) -> bytes:
         """Generate PDF report"""
-        # Placeholder for PDF generation
-        html_content = self._generate_html(scan_result, template)
-        return html_content.encode()
+        from reports.pdf_generator import generate_scan_pdf_bytes
+        return generate_scan_pdf_bytes(scan_result)
     
     def _generate_csv(self, scan_result: ScanResult) -> str:
         """Generate CSV report"""

@@ -1889,14 +1889,16 @@ class ReportGenerator:
             )
             if pisa_status.err:
                 logger.error("PDF generation error")
-                return html_content.encode()
+                from reports.pdf_generator import generate_scan_pdf_bytes
+                return generate_scan_pdf_bytes(scan_result)
             return output.getvalue()
         except ImportError:
-            logger.warning("⚠️ xhtml2pdf module not found. Install it for real PDF support.")
-            return html_content.encode()
+            from reports.pdf_generator import generate_scan_pdf_bytes
+            return generate_scan_pdf_bytes(scan_result)
         except Exception as e:
             logger.error(f"⚠️ PDF generation failed: {e}")
-            return html_content.encode()
+            from reports.pdf_generator import generate_scan_pdf_bytes
+            return generate_scan_pdf_bytes(scan_result)
     
     def _generate_csv(self, scan_result: ScanResult) -> str:
         """Generate CSV report"""
@@ -2095,6 +2097,8 @@ class CortexScanner:
         self.scan_id = self._generate_scan_id()
         self.session = None
         self.visited_urls = set()
+        self.tech_stack = set()
+        self.vulnerabilities = []
         self.url_queue = asyncio.PriorityQueue()
         self.plugin_manager = PluginManager()
         self.rate_limiter = SmartRateLimiter(max_rpm=60)
@@ -2206,6 +2210,14 @@ class CortexScanner:
     
     async def _initialize_scan(self):
         """Initialize scan in database"""
+        self.visited_urls = set()
+        self.tech_stack = set()
+        self.vulnerabilities = []
+        self.url_queue = asyncio.PriorityQueue()
+        for key in ('urls_scanned', 'requests_made', 'vulnerabilities_found',
+                    'critical', 'high', 'medium', 'low', 'info'):
+            self.stats[key] = 0
+        self.stats['end_time'] = None
         self.scan_id = self._generate_scan_id()
         self.scan_record = Scan(
             scan_uuid=self.scan_id,
@@ -2225,7 +2237,7 @@ class CortexScanner:
     
     async def _execute_scan(self, progress_callback=None) -> List[Vulnerability]:
         """Execute the main scanning logic"""
-        vulnerabilities = []
+        vulnerabilities = self.vulnerabilities
         
         # Setup HTTP session
         connector = aiohttp.TCPConnector(ssl=False, limit=self.config.max_concurrency)
@@ -2248,11 +2260,12 @@ class CortexScanner:
             ]
             
             # Process queue
-            await self.url_queue.join()
-            
-            # Cancel workers
-            for worker in workers:
-                worker.cancel()
+            try:
+                await self.url_queue.join()
+            finally:
+                for worker in workers:
+                    worker.cancel()
+                await asyncio.gather(*workers, return_exceptions=True)
         
         return vulnerabilities
 
@@ -2461,6 +2474,7 @@ class CortexScanner:
         
         # Update stats
         self.stats['vulnerabilities_found'] += 1
+        self.vulnerabilities.append(vulnerability)
         
         # Log finding
         logger.warning(f"🔥 {vulnerability.severity.value}: {vulnerability.type.value} at {vulnerability.url}")
@@ -2634,73 +2648,16 @@ class CortexScanner:
 TitaniumScannerV15 = CortexScanner
 
 # === WEB INTERFACE ===
-class WebInterface:
-    """Web-based interface for the scanner"""
-    
-    def __init__(self, scanner: TitaniumScannerV15):
-        self.scanner = scanner
-        self.app = None
-    
-    def run(self, host='127.0.0.1', port=8080):
-        """Run web interface"""
-        try:
-            from flask import Flask, render_template, request, jsonify, send_file
-            import threading
-            
-            self.app = Flask(__name__)
-            
-            @self.app.route('/')
-            def index():
-                return render_template('index.html')
-            
-            @self.app.route('/scan', methods=['POST'])
-            def start_scan():
-                data = request.json
-                config = ScanConfig(
-                    target_url=data['target'],
-                    mode=ScanMode(data.get('mode', 'safe')),
-                    max_depth=int(data.get('max_depth', 5)),
-                    max_concurrency=int(data.get('max_concurrency', 25)),
-                )
-                
-                # Start scan in background
-                thread = threading.Thread(
-                    target=self._run_scan_in_thread,
-                    args=(config,)
-                )
-                thread.start()
-                
-                return jsonify({'scan_id': self.scanner.scan_id, 'status': 'started'})
-            
-            @self.app.route('/status/<scan_id>')
-            def scan_status(scan_id):
-                # Return scan status
-                return jsonify({'status': 'running', 'progress': 0.5})
-            
-            @self.app.route('/report/<scan_id>')
-            def get_report(scan_id):
-                # Generate and return report
-                return jsonify({'report': 'generated'})
-            
-            self.app.run(host=host, port=port, debug=False)
-            
-        except ImportError:
-            logger.error("Flask not installed. Web interface disabled.")
-    
-    def _run_scan_in_thread(self, config: ScanConfig):
-        """Run scan in background thread"""
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
-        scanner = TitaniumScannerV15(config)
-        result = loop.run_until_complete(scanner.scan())
-        
-        # Save report
-        report = scanner.report_generator.generate(result, format='html')
-        with open(f"report_{scanner.scan_id}.html", 'w') as f:
-            f.write(report)
-        
-        loop.close()
+if __package__:
+    from .web_interface import ScannerWebInterface
+else:
+    from web_interface import ScannerWebInterface
+
+
+class WebInterface(ScannerWebInterface):
+    def __init__(self, scanner):
+        super().__init__(scanner, TitaniumScannerV15, ScanConfig, ScanMode)
+
 
 # === COMMAND LINE INTERFACE ===
 def main():
