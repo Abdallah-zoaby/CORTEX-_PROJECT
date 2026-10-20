@@ -14,6 +14,8 @@ import os
 import io
 import json
 from xml.sax.saxutils import escape
+from core.privacy import sanitize, shareable_copy, redact_text
+from core.findings import summary, normalize
 
 # --- ARABIC SUPPORT ---
 try:
@@ -46,10 +48,10 @@ def generate_pdf_report(scan_results, simulation_logs='', ai_analysis='', filena
         simulation_logs = ''
         ai_analysis = ''
 
-    host_findings = list(getattr(scan_results, 'findings', []) or [])
-    raw_findings = host_findings + list(web_findings or [])
+    host_findings = sanitize(list(getattr(scan_results, 'findings', []) or []))
+    raw_findings = host_findings + list(shareable_copy(web_findings or []))
     if not raw_findings:
-        raw_findings = list(getattr(scan_results, 'vulnerabilities', []) or [])
+        raw_findings = list(shareable_copy(getattr(scan_results, 'vulnerabilities', []) or []))
     normalized = []
     for finding in raw_findings:
         def field(name, default=''):
@@ -67,19 +69,22 @@ def generate_pdf_report(scan_results, simulation_logs='', ai_analysis='', filena
         })
     web_findings = normalized
 
-    ai_analysis = ai_analysis or ''
-    simulation_logs = simulation_logs or ''
+    ai_analysis = redact_text(ai_analysis or '')
+    simulation_logs = redact_text(simulation_logs or '')
 
     doc = SimpleDocTemplate(filename, pagesize=A4, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
     story = []
 
     # --- 1. TITLE PAGE ---
     story.append(Spacer(1, 2*inch))
-    story.append(Paragraph("TITANIUM SECURITY AUDIT", style_title))
+    story.append(Paragraph("CORTEX EVIDENCE REVIEW", style_title))
     story.append(Paragraph(f"Date: {time.strftime('%Y-%m-%d %H:%M:%S')}", style_normal))
     story.append(Paragraph('Evidence assessment: observations and historical detections do not prove active infection. No safety guarantee.', style_normal))
     if getattr(scan_results, 'coverage', None):
-        story.append(Paragraph(escape(json.dumps(scan_results.coverage, ensure_ascii=False, default=str)), style_normal))
+        story.append(Paragraph(escape(json.dumps(sanitize(scan_results.coverage), ensure_ascii=False, default=str)), style_normal))
+    records = [normalize(f, 'host' if isinstance(f, dict) and f.get('classification') else 'web') for f in raw_findings]
+    story.append(Paragraph(escape('Assessment summary: ' + json.dumps(summary(records))), style_normal))
+    story.append(Paragraph('Scope: only reported observations and implemented checks. Unavailable, skipped and interrupted work is not a safety clearance. Recommended actions require evidence review. Shared output omits raw response bodies, commands and known secret patterns.', style_normal))
     if web_findings:
         story.append(Paragraph(f"Total Findings: {len(web_findings)}", style_normal))
     

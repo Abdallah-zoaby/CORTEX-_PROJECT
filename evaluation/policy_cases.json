@@ -1,0 +1,14 @@
+[
+  {"id":"signed-appdata", "name":"editor.exe", "path":"C:\\Users\\Fixture\\AppData\\editor.exe", "command":[], "signature":"Valid", "inspected":true, "needs_review":false},
+  {"id":"unsigned-appdata", "name":"editor.exe", "path":"C:\\Users\\Fixture\\AppData\\editor.exe", "command":[], "signature":"NotSigned", "inspected":true, "needs_review":false},
+  {"id":"temporary-node", "name":"node.exe", "path":"C:\\Temp\\node.exe", "command":[], "signature":"Valid", "inspected":true, "needs_review":false},
+  {"id":"dual-use-name", "name":"xmrig.exe", "path":"C:\\Tools\\xmrig.exe", "command":[], "signature":"NotSigned", "inspected":true, "needs_review":false},
+  {"id":"encoded-admin-script", "name":"powershell.exe", "path":"C:\\Windows\\powershell.exe", "command":["powershell.exe","-enc","synthetic"], "signature":"Valid", "inspected":true, "needs_review":false},
+  {"id":"ide-command-text", "name":"editor.exe", "path":"C:\\Tools\\editor.exe", "command":["DownloadString iex"], "signature":"HashMismatch", "inspected":true, "needs_review":false},
+  {"id":"download-only-indicator", "name":"powershell.exe", "path":"C:\\Windows\\powershell.exe", "command":["Invoke-WebRequest iex"], "signature":"Valid", "inspected":true, "needs_review":false},
+  {"id":"integrity-only-indicator", "name":"tool.exe", "path":"C:\\Tools\\tool.exe", "command":[], "signature":"HashMismatch", "inspected":true, "needs_review":false},
+  {"id":"correlated-signals", "name":"powershell.exe", "path":"C:\\Tools\\powershell.exe", "command":["DownloadString iex"], "signature":"HashMismatch", "inspected":true, "needs_review":true},
+  {"id":"correlated-pwsh", "name":"pwsh.exe", "path":"C:\\Temp\\pwsh.exe", "command":["Invoke-WebRequest Invoke-Expression"], "signature":"HashMismatch", "inspected":true, "needs_review":true},
+  {"id":"unreadable-benign", "name":"editor.exe", "path":"C:\\Tools\\editor.exe", "command":[], "signature":"Unavailable", "inspected":false, "needs_review":false},
+  {"id":"unverified-review-target", "name":"powershell.exe", "path":"C:\\Tools\\powershell.exe", "command":["DownloadString iex"], "signature":"Unavailable", "inspected":false, "needs_review":true}
+]

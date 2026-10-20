@@ -47,6 +47,9 @@ jobs:
       - name: Run regression and integration tests
         run: python -m unittest discover -s tests -p "test_*.py" -v
 
+      - name: Replay synthetic policy evaluation
+        run: python -m evaluation.run --output output/evaluation/policy.json
+
       - name: 🧪 Run QA Automated Test Suite
         run: |
           python qa_test.py

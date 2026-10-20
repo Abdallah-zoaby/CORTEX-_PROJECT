@@ -230,6 +230,26 @@ class SystemIntegrationTests(unittest.TestCase):
                 exported_data = json.loads(exported.read_text(encoding='utf-8'))
                 self.assertEqual(exported_data['schema_version'], 1)
                 self.assertEqual(exported_data['findings'], app.evidence_records)
+                from core.history import ScanHistory
+                from core.lifecycle import ScanControl
+                app.history = ScanHistory(Path(self.folder.name) / 'gui-history.db')
+                app.history.save('host', 'fixture', [active], coverage)
+                app.history.save('host', 'fixture', [], coverage, 'cancelled')
+                app.open_scan_history()
+                windows = [w for w in app.winfo_children() if isinstance(w, self.gui.ctk.CTkToplevel)]
+                self.assertEqual(len(windows), 1)
+                window = windows[0]
+                tree = next(w for w in window.winfo_children() if isinstance(w, self.gui.ttk.Treeview))
+                self.assertEqual(len(tree.get_children()), 2)
+                tree.selection_set(tree.get_children())
+                tree.event_generate('<<TreeviewSelect>>')
+                app.update()
+                output = next(w for w in window.winfo_children() if isinstance(w, self.gui.ctk.CTkTextbox))
+                self.assertIn('not_observed', output.get('1.0', 'end'))
+                window.destroy()
+                app._scan_control = ScanControl()
+                app.cancel_assessment()
+                self.assertTrue(app._scan_control.event.is_set())
             finally:
                 app.scanner.db_session.close()
                 app.destroy()
@@ -282,6 +302,133 @@ class SystemIntegrationTests(unittest.TestCase):
             with self.subTest(module=name):
                 importlib.import_module(name)
 
+    def test_ai_decline_sends_nothing_and_preview_contains_only_aggregates(self):
+        ui = Mock()
+        ui._ai_running = False
+        ui.evidence_records = [dict(classification='observation', path=r'C:\private-user\private.exe',
+                                    command_line='synthetic-private-secret')]
+        ui.web_findings = []
+        ui.evidence_coverage = {'defender_status': 'unavailable'}
+        with patch.object(self.gui.messagebox, 'askyesno', return_value=False) as consent, \
+                patch.object(self.gui.threading, 'Thread') as thread:
+            self.gui.CortexProApp.ask_ai_analyst(ui)
+        thread.assert_not_called()
+        preview = consent.call_args.args[1]
+        self.assertNotIn('private-user', preview)
+        self.assertNotIn('synthetic-private-secret', preview)
+        self.assertIn('unavailable', preview)
+
+    def test_scope_rejects_other_hosts_ports_credentials_and_schemes(self):
+        scanner = self.scanner_module.CortexScanner(self.scanner_module.ScanConfig(target_url='http://127.0.0.1:5555'))
+        try:
+            self.assertTrue(scanner._is_in_scope('http://127.0.0.1:5555/path'))
+            for url in ('http://127.0.0.1:5556', 'http://localhost:5555', 'https://127.0.0.1:5555',
+                        'http://user:password@127.0.0.1:5555', 'http://external.test', 'file:///test'):
+                self.assertFalse(scanner._is_in_scope(url), url)
+        finally:
+            scanner.db_session.close()
+
+    def test_hanging_prescan_hook_respects_deadline(self):
+        from core.lifecycle import ScanControl, ScanStopped
+        m = self.scanner_module
+        async def exercise():
+            scanner = m.CortexScanner(m.ScanConfig(target_url='http://127.0.0.1:5555'))
+            async def hang(*args):
+                await asyncio.sleep(30)
+            scanner.plugin_manager.execute_hook = AsyncMock(side_effect=hang)
+            try:
+                with self.assertRaises(ScanStopped):
+                    await scanner.scan(control=ScanControl(max_seconds=0.05))
+                self.assertFalse(scanner._assessment_running)
+            finally:
+                scanner.db_session.close()
+        asyncio.run(exercise())
+
+    def test_crawl_depth_and_origin_limit_new_queue_entries(self):
+        m = self.scanner_module
+        async def exercise():
+            scanner = m.CortexScanner(m.ScanConfig(target_url='http://127.0.0.1:5555/', max_depth=1))
+            scanner._url_depths = {scanner.config.target_url: 0}
+            try:
+                await scanner._extract_and_queue_links(scanner.config.target_url,
+                    '<a href="/inside">ok</a><a href="http://external.test/outside">outside</a>')
+                self.assertEqual(scanner.url_queue.qsize(), 1)
+                await scanner._extract_and_queue_links('http://127.0.0.1:5555/inside', '<a href="/too-deep">deep</a>')
+                self.assertEqual(scanner.url_queue.qsize(), 1)
+            finally:
+                scanner.db_session.close()
+        asyncio.run(exercise())
+
+    def test_cancelled_web_scan_cleans_workers_session_and_restores_reusability(self):
+        from core.lifecycle import ScanControl, ScanStopped
+        m = self.scanner_module
+        async def exercise():
+            from aiohttp import web
+            async def slow(request):
+                await asyncio.sleep(0.4)
+                return web.Response(text='<html>Fixture</html>')
+            app = web.Application()
+            app.router.add_get('/', slow)
+            runner = web.AppRunner(app)
+            await runner.setup()
+            site = web.TCPSite(runner, '127.0.0.1', 0)
+            await site.start()
+            port = site._server.sockets[0].getsockname()[1]
+            scanner = m.CortexScanner(m.ScanConfig(target_url=f'http://127.0.0.1:{port}', max_concurrency=1))
+            scanner.plugin_manager.execute_hook = AsyncMock(return_value=[])
+            scanner.ai_detector.analyze_response = AsyncMock()
+            control = ScanControl(max_seconds=0.05)
+            try:
+                with self.assertRaises(ScanStopped):
+                    await scanner.scan(control=control)
+                self.assertFalse(scanner._assessment_running)
+                self.assertTrue(scanner.session is None or scanner.session.closed)
+                persisted = scanner.db_session.query(m.Scan).filter_by(scan_uuid=scanner.scan_id).one()
+                self.assertEqual(persisted.status, 'TIMED_OUT')
+                result = await scanner.scan(control=ScanControl(max_seconds=5))
+                self.assertEqual(result.total_urls_scanned, 1)
+                scanner.ai_detector.analyze_response.assert_not_awaited()
+            finally:
+                scanner.db_session.close()
+                await runner.cleanup()
+        asyncio.run(exercise())
+
+    def test_report_formats_redact_secrets_escape_html_and_preserve_original(self):
+        import datetime
+        from pypdf import PdfReader
+        m = self.scanner_module
+        vuln = m.Vulnerability(type=m.VulnerabilityType.CUSTOM, severity=m.SeverityLevel.LOW,
+            confidence=0.5, url='http://example.test/?session=synthetic-secret',
+            description='<script>literal</script>', evidence='unlabelled-sensitive-value')
+        result = m.ScanResult(scan_id='fixture', target='http://example.test/?token=synthetic-secret',
+            start_time=datetime.datetime.now(), end_time=datetime.datetime.now(), total_urls_scanned=1,
+            vulnerabilities_found=1, vulnerabilities=[vuln], tech_stack={}, scan_config=m.ScanConfig(target_url='http://example.test'), summary={})
+        for format in ('html', 'json', 'csv', 'pdf'):
+            output = m.ReportGenerator().generate(result, format=format)
+            if format == 'pdf':
+                import io
+                text = '\n'.join(page.extract_text() for page in PdfReader(io.BytesIO(output)).pages)
+            else:
+                text = output
+            self.assertNotIn('synthetic-secret', text)
+            self.assertNotIn('unlabelled-sensitive-value', text)
+            if format == 'html':
+                self.assertIn('&lt;script&gt;', text)
+        self.assertEqual(vuln.evidence, 'unlabelled-sensitive-value')
+
+    def test_unavailable_http_response_cannot_complete_as_empty_clean_scan(self):
+        m = self.scanner_module
+        async def exercise():
+            scanner = m.CortexScanner(m.ScanConfig(target_url='http://127.0.0.1:5555', max_concurrency=1))
+            scanner.plugin_manager.execute_hook = AsyncMock(return_value=[])
+            scanner._fetch_url = AsyncMock(return_value=(None, {}, 0))
+            try:
+                with self.assertRaisesRegex(RuntimeError, 'could not be processed'):
+                    await scanner.scan()
+            finally:
+                scanner.db_session.close()
+        asyncio.run(exercise())
+
     def test_real_chromium_renders_dynamic_page(self):
         async def exercise():
             from aiohttp import web
@@ -299,6 +446,7 @@ class SystemIntegrationTests(unittest.TestCase):
             await site.start()
             port = site._server.sockets[0].getsockname()[1]
             scanner = self.scanner_module.CortexScanner()
+            scanner.config.target_url = f'http://127.0.0.1:{port}/'
             try:
                 content, _, status = await scanner._fetch_dynamic(f'http://127.0.0.1:{port}/')
                 self.assertEqual(status, 200)

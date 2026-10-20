@@ -1,6 +1,9 @@
 """Evidence-aware summary; numerical severity never proves compromise."""
 
 
+from core.findings import normalize
+
+
 class RiskEngine:
     def __init__(self):
         self.total_score = 0
@@ -24,7 +27,7 @@ class RiskEngine:
                       color={'CRITICAL': 'DARKRED', 'HIGH': 'RED', 'MEDIUM': 'ORANGE',
                              'LOW': 'GREEN'}.get(severity, 'BLACK'))
         self.total_score += {'CRITICAL': 50, 'HIGH': 30, 'MEDIUM': 15, 'LOW': 5}.get(severity, 0)
-        self.findings.append(record)
+        self.findings.append(normalize(record))
 
     def add_evidence(self, record):
         record = dict(record)
@@ -39,6 +42,7 @@ class RiskEngine:
         if any(f.get('classification') == 'corroborated_suspicion' for f in self.findings):
             return 'CORROBORATED INDICATORS - investigation required', 'ORANGE'
         if (self.coverage.get('defender_status') != 'available'
+                or self.coverage.get('assessment_status', 'completed') != 'completed'
                 or self.coverage.get('defender_health', {}).get('AntivirusEnabled') is not True
                 or self.coverage.get('unknown_files', 0)
                 or any(self.coverage.get(key) for key in ('process_error', 'configuration_error', 'file_errors'))):

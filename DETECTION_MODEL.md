@@ -1,5 +1,7 @@
 # CORTEX host evidence model
 
+See [PROJECT_REVIEW.md](PROJECT_REVIEW.md) for the current graduation-project scope, privacy boundary, cancellation/history workflow and reproducible synthetic evaluation. Legacy credential-reading and persistence training actions are now synthetic only; automatic web AI submission and guessed CVE assignment are disabled.
+
 CORTEX is a local evidence/review interface, not an independently validated antivirus engine. The expert's review and an isolated, independently labelled evaluation corpus are still needed before making detection-effectiveness claims.
 
 ## Assessment categories
@@ -42,7 +44,7 @@ Default limits are explicit: process executable observations plus at most 15 can
 
 ## Interface and reports
 
-The Forensics tab provides filters for engine detections, corroborated suspicion, observations, unknowns and history; selecting a row shows its full evidence. JSON export preserves the coverage and records. Exports may contain personal paths and command-line arguments: review them before sharing.
+The Forensics tab provides filters for engine detections, corroborated suspicion, observations, unknowns and history; selecting a row shows its full local evidence. Shared JSON/PDF outputs preserve coverage and classifications while omitting command lines, raw response evidence and known secret patterns. Personal data outside those patterns may remain; review exports before sharing.
 
 The PDF contains both host and web findings, confidence/classification and coverage; literal file/command content is escaped as text. Context-only and historical records do not inflate active-threat Analytics. Unknown provider state does not produce a host clearance index. Synthetic visuals and training demos are labelled as simulations. AI explanations are optional, do not run automatically after host assessment and cannot rewrite the evidence classifications.
 

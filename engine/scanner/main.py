@@ -1,3 +1,5 @@
+from core.privacy import sanitize, redact_text
+from core.lifecycle import ScanStopped, ScanControl
 """
 TITANIUM WEB SCANNER v15.0 - Professional Security Assessment Tool
 Author: Enhanced Security Team
@@ -160,7 +162,8 @@ class ColoredFormatter(logging.Formatter):
     
     def format(self, record):
         color = self.COLORS.get(record.levelname, self.COLORS['INFO'])
-        record.msg = f"{color}{record.msg}{self.COLORS['RESET']}"
+        record.msg = f"{color}{redact_text(record.getMessage())}{self.COLORS['RESET']}"
+        record.args = ()
         return super().format(record)
 
 logging.basicConfig(level=CONFIG['LOG_LEVEL'])
@@ -683,7 +686,7 @@ class AIMLDetector:
             
             # Run in executor to avoid blocking event loop
             loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(None, lambda: self.model.generate_content(prompt))
+            response = await loop.run_in_executor(None, lambda: self.model.generate_content(redact_text(prompt)))
             
             if response and response.text:
                 text = response.text.replace('```json', '').replace('```', '').strip()
@@ -1821,270 +1824,7 @@ class CacheManager:
         }
 
 # === REPORT GENERATOR ===
-class ReportGenerator:
-    """Advanced report generation system"""
-    
-    def __init__(self):
-        self.templates = self._load_templates()
-    
-    def _load_templates(self):
-        """Load report templates"""
-        return {
-            'executive': self._executive_template,
-            'technical': self._technical_template,
-            'developer': self._developer_template,
-            'compliance': self._compliance_template,
-        }
-    
-    def generate(self, scan_result: ScanResult, format: str = 'html', template: str = 'executive'):
-        """Generate report"""
-        if format == 'json':
-            return self._generate_json(scan_result)
-        elif format == 'html':
-            return self._generate_html(scan_result, template)
-        elif format == 'pdf':
-            return self._generate_pdf(scan_result, template)
-        elif format == 'csv':
-            return self._generate_csv(scan_result)
-        else:
-            raise ValueError(f"Unsupported format: {format}")
-    
-    def _generate_json(self, scan_result: ScanResult) -> str:
-        """Generate JSON report"""
-        return json.dumps({
-            'scan_id': scan_result.scan_id,
-            'target': scan_result.target,
-            'start_time': scan_result.start_time.isoformat(),
-            'end_time': scan_result.end_time.isoformat(),
-            'duration': (scan_result.end_time - scan_result.start_time).total_seconds(),
-            'vulnerabilities': [
-                {
-                    'type': vuln.type.value,
-                    'severity': vuln.severity.value,
-                    'confidence': vuln.confidence,
-                    'url': vuln.url,
-                    'description': vuln.description,
-                    'remediation': vuln.remediation
-                }
-                for vuln in scan_result.vulnerabilities
-            ],
-            'summary': scan_result.summary,
-            'tech_stack': scan_result.tech_stack
-        }, indent=2)
-    
-    def _generate_html(self, scan_result: ScanResult, template: str) -> str:
-        """Generate HTML report"""
-        template_func = self.templates.get(template, self._executive_template)
-        return template_func(scan_result)
-    
-    def _generate_pdf(self, scan_result: ScanResult, template: str) -> bytes:
-        """Generate PDF report via xhtml2pdf"""
-        html_content = self._generate_html(scan_result, template)
-        try:
-            from xhtml2pdf import pisa
-            output = io.BytesIO()
-            pisa_status = pisa.CreatePDF(
-                io.BytesIO(html_content.encode('utf-8')), 
-                dest=output
-            )
-            if pisa_status.err:
-                logger.error("PDF generation error")
-                from reports.pdf_generator import generate_scan_pdf_bytes
-                return generate_scan_pdf_bytes(scan_result)
-            return output.getvalue()
-        except ImportError:
-            from reports.pdf_generator import generate_scan_pdf_bytes
-            return generate_scan_pdf_bytes(scan_result)
-        except Exception as e:
-            logger.error(f"⚠️ PDF generation failed: {e}")
-            from reports.pdf_generator import generate_scan_pdf_bytes
-            return generate_scan_pdf_bytes(scan_result)
-    
-    def _generate_csv(self, scan_result: ScanResult) -> str:
-        """Generate CSV report"""
-        import csv
-        import io
-        
-        output = io.StringIO()
-        writer = csv.writer(output)
-        
-        # Write header
-        writer.writerow(['Type', 'Severity', 'URL', 'Description', 'Confidence', 'CVSS'])
-        
-        # Write data
-        for vuln in scan_result.vulnerabilities:
-            writer.writerow([
-                vuln.type.value,
-                vuln.severity.value,
-                vuln.url,
-                vuln.description[:100],
-                vuln.confidence,
-                vuln.cvss_score
-            ])
-        
-        return output.getvalue()
-    
-    def _executive_template(self, scan_result: ScanResult) -> str:
-        """Executive summary template"""
-        return f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Security Scan Report - {scan_result.target}</title>
-            <style>
-                body {{ font-family: Arial, sans-serif; margin: 40px; }}
-                .header {{ background: #2c3e50; color: white; padding: 20px; }}
-                .summary {{ background: #ecf0f1; padding: 20px; margin: 20px 0; }}
-                .vuln {{ border-left: 4px solid #e74c3c; padding: 10px; margin: 10px 0; }}
-                .critical {{ border-color: #c0392b; }}
-                .high {{ border-color: #e74c3c; }}
-                .medium {{ border-color: #f39c12; }}
-                .low {{ border-color: #f1c40f; }}
-            </style>
-        </head>
-        <body>
-            <div class="header">
-                <h1>Security Assessment Report</h1>
-                <p>Target: {scan_result.target}</p>
-                <p>Scan ID: {scan_result.scan_id}</p>
-            </div>
-            
-            <div class="summary">
-                <h2>Executive Summary</h2>
-                <p>Scan completed in {scan_result.summary.get('duration', 0):.1f} seconds</p>
-                <p>Vulnerabilities found: {len(scan_result.vulnerabilities)}</p>
-                <p>Critical: {scan_result.summary.get('critical', 0)}</p>
-                <p>High: {scan_result.summary.get('high', 0)}</p>
-            </div>
-            
-            <h2>Vulnerabilities</h2>
-            {"".join([
-                f'<div class="vuln {vuln.severity.value.lower()}">'
-                f'<h3>{vuln.type.value} ({vuln.severity.value})</h3>'
-                f'<p><strong>URL:</strong> {vuln.url}</p>'
-                f'<p><strong>Description:</strong> {vuln.description}</p>'
-                f'<p><strong>Remediation:</strong> {vuln.remediation}</p>'
-                f'</div>'
-                for vuln in scan_result.vulnerabilities
-            ])}
-        </body>
-        </html>
-        """
-    
-    def _technical_template(self, scan_result: ScanResult) -> str:
-        """Technical detailed template"""
-        return f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Technical Report - {scan_result.target}</title>
-            <style>
-                body {{ font-family: monospace; margin: 20px; }}
-                pre {{ background: #f5f5f5; padding: 10px; }}
-                table {{ border-collapse: collapse; width: 100%; }}
-                th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
-            </style>
-        </head>
-        <body>
-            <h1>Technical Security Report</h1>
-            <h2>Scan Details</h2>
-            <pre>
-            Target: {scan_result.target}
-            Start: {scan_result.start_time}
-            End: {scan_result.end_time}
-            Duration: {(scan_result.end_time - scan_result.start_time).total_seconds():.1f}s
-            URLs Scanned: {scan_result.total_urls_scanned}
-            </pre>
-            
-            <h2>Vulnerabilities</h2>
-            <table>
-                <tr>
-                    <th>Type</th><th>Severity</th><th>URL</th><th>Confidence</th><th>Evidence</th>
-                </tr>
-                {"".join([
-                    f'<tr>'
-                    f'<td>{vuln.type.value}</td>'
-                    f'<td>{vuln.severity.value}</td>'
-                    f'<td>{vuln.url[:50]}...</td>'
-                    f'<td>{vuln.confidence:.1%}</td>'
-                    f'<td>{vuln.evidence[:100]}</td>'
-                    f'</tr>'
-                    for vuln in scan_result.vulnerabilities
-                ])}
-        </table>
-        </body>
-        </html>
-        """
-    
-    def _developer_template(self, scan_result: ScanResult) -> str:
-        """Developer-focused template with code remediation"""
-        return f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Developer Security Report - {scan_result.target}</title>
-            <style>
-                body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 40px; background: #f8f9fa; }}
-                .container {{ max-width: 1000px; margin: auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 0 20px rgba(0,0,0,0.1); }}
-                .patch {{ background: #272822; color: #f8f8f2; padding: 15px; border-radius: 5px; font-family: 'Consolas', monospace; overflow-x: auto; }}
-                h1, h2 {{ color: #0366d6; }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <h1>Developer Remediation Report</h1>
-                <p><strong>Target:</strong> {scan_result.target}</p>
-                <hr>
-                
-                <h2>Security Findings & Patches</h2>
-                {"".join([
-                    f'<div style="margin-bottom: 30px; border-bottom: 1px solid #eee; padding-bottom: 20px;">'
-                    f'<h3>{vuln.type.value} ({vuln.severity.value})</h3>'
-                    f'<p><strong>Endpoint:</strong> {vuln.url}</p>'
-                    f'<p><strong>Recommended Action:</strong></p>'
-                    f'<div class="patch">{vuln.remediation}</div>'
-                    f'</div>'
-                    for vuln in scan_result.vulnerabilities
-                ])}
-            </div>
-        </body>
-        </html>
-        """
-
-    def _compliance_template(self, scan_result: ScanResult) -> str:
-        """Compliance-focused template (OWASP/PCI-DSS)"""
-        status = "NON-COMPLIANT" if any(v.severity.value in ["HIGH", "CRITICAL"] for v in scan_result.vulnerabilities) else "COMPLIANT"
-        return f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Compliance Audit - {scan_result.target}</title>
-            <style>
-                body {{ font-family: sans-serif; margin: 50px; text-align: center; }}
-                .status {{ font-size: 24px; font-weight: bold; padding: 20px; border-radius: 5px; display: inline-block; margin: 20px; }}
-                .fail {{ background: #ffdce0; color: #d73a49; border: 1px solid #d73a49; }}
-                .pass {{ background: #dcffe4; color: #28a745; border: 1px solid #28a745; }}
-                table {{ margin: 30px auto; border-collapse: collapse; width: 80%; }}
-                th, td {{ border: 1px solid #ddd; padding: 12px; }}
-            </style>
-        </head>
-        <body>
-            <h1>Security Compliance Audit Report</h1>
-            <p>Standard: <strong>OWASP Top 10 / PCI-DSS Internal Review</strong></p>
-            
-            <div class="status {'fail' if status == 'NON-COMPLIANT' else 'pass'}">
-                CURRENT STATUS: {status}
-            </div>
-            
-            <table>
-                <tr><th>Standard Control</th><th>Findings</th><th>Status</th></tr>
-                <tr><td>Broken Access Control</td><td>{len([v for v in scan_result.vulnerabilities if "IDOR" in v.type.value])}</td><td>{'❌' if any("IDOR" in v.type.value for v in scan_result.vulnerabilities) else '✅'}</td></tr>
-                <tr><td>Injection</td><td>{len([v for v in scan_result.vulnerabilities if "Injection" in v.type.value])}</td><td>{'❌' if any("Injection" in v.type.value for v in scan_result.vulnerabilities) else '✅'}</td></tr>
-                <tr><td>Cryptographic Failures</td><td>0</td><td>✅</td></tr>
-            </table>
-        </body>
-        </html>
-        """
+from engine.scanner.utils.report import ReportGenerator
 
 # === MAIN SCANNER CLASS ===
 class CortexScanner:
@@ -2183,39 +1923,52 @@ class CortexScanner:
         random_str = secrets.token_hex(4)
         return f"SCAN-{timestamp}-{random_str}"
     
-    async def scan(self, progress_callback=None) -> ScanResult:
+    async def scan(self, progress_callback=None, control=None) -> ScanResult:
         """Execute the scan"""
+        control = control or ScanControl(max_seconds=300)
+        if getattr(self, '_assessment_running', False):
+            raise RuntimeError('This scanner already has an active assessment')
+        self._assessment_running = True
         try:
-            # Initialize scan record
-            await self._initialize_scan()
-            
-            # Execute pre-scan hooks
-            await self.plugin_manager.execute_hook('pre_scan', self, self.config)
-            
-            # Start scanning
-            results = await self._execute_scan(progress_callback)
-            
-            # Execute post-scan hooks
-            await self.plugin_manager.execute_hook('post_scan', self, results)
-            
-            # Generate final report
-            final_result = await self._generate_final_result(results)
-            
-            return final_result
-            
+            self.scan_record = None
+            self._scan_control = control
+            if control:
+                control.checkpoint()
+            work = asyncio.create_task(self._scan_phases(progress_callback))
+            try:
+                while not work.done():
+                    control.checkpoint()
+                    await asyncio.wait({work}, timeout=0.1)
+                control.checkpoint()
+                return await work
+            finally:
+                work.cancel()
+                await asyncio.gather(work, return_exceptions=True)
+
         except Exception as e:
             logger.error(f"❌ Scan failed: {e}")
             try:
                 self.db_session.rollback()
                 if self.scan_record is not None and self.scan_record.id is not None:
-                    self.scan_record.status = 'FAILED'
+                    self.scan_record.status = e.status.upper() if isinstance(e, ScanStopped) else 'FAILED'
                     self.db_session.commit()
             except Exception:
                 logger.exception('Could not persist failed scan status')
             raise
         finally:
-            await self._cleanup()
+            try:
+                await self._cleanup()
+            finally:
+                self._assessment_running = False
     
+    async def _scan_phases(self, progress_callback):
+        await self._initialize_scan()
+        await self.plugin_manager.execute_hook('pre_scan', self, self.config)
+        results = await self._execute_scan(progress_callback)
+        await self.plugin_manager.execute_hook('post_scan', self, results)
+        self._scan_control.checkpoint()
+        return await self._generate_final_result(results)
+
     async def _initialize_scan(self):
         """Initialize scan in database"""
         self.scan_record = None
@@ -2224,6 +1977,7 @@ class CortexScanner:
         self.vulnerabilities = []
         self._worker_errors = []
         self.url_queue = asyncio.PriorityQueue()
+        self._url_depths = {self.config.target_url: 0}
         for key in ('urls_scanned', 'requests_made', 'vulnerabilities_found',
                     'critical', 'high', 'medium', 'low', 'info'):
             self.stats[key] = 0
@@ -2231,7 +1985,7 @@ class CortexScanner:
         self.scan_id = self._generate_scan_id()
         self.scan_record = Scan(
             scan_uuid=self.scan_id,
-            target_url=self.config.target_url,
+            target_url=redact_text(self.config.target_url),
             status="RUNNING",
             mode=self.config.mode.value,
             config={
@@ -2253,7 +2007,18 @@ class CortexScanner:
         connector = aiohttp.TCPConnector(ssl=False, limit=self.config.max_concurrency)
         timeout = aiohttp.ClientTimeout(total=self.config.timeout)
         
+        trace = aiohttp.TraceConfig()
+        async def enforce_scope(session, context, params):
+            candidate = str(params.url)
+            response = getattr(params, 'response', None)
+            if response is not None and response.headers.get('Location'):
+                candidate = urljoin(candidate, response.headers['Location'])
+            if not self._is_in_scope(candidate):
+                raise ValueError('Request outside the authorized origin')
+        trace.on_request_start.append(enforce_scope)
+        trace.on_request_redirect.append(enforce_scope)
         async with aiohttp.ClientSession(
+            trace_configs=[trace],
             connector=connector,
             timeout=timeout,
             headers=self._get_default_headers()
@@ -2271,7 +2036,17 @@ class CortexScanner:
             
             # Process queue
             try:
-                await self.url_queue.join()
+                joined = asyncio.create_task(self.url_queue.join())
+                try:
+                    while not joined.done():
+                        control = getattr(self, '_scan_control', None)
+                        if control:
+                            control.checkpoint()
+                        await asyncio.wait({joined}, timeout=0.1)
+                    await joined
+                finally:
+                    joined.cancel()
+                    await asyncio.gather(joined, return_exceptions=True)
             finally:
                 for worker in workers:
                     worker.cancel()
@@ -2335,6 +2110,8 @@ class CortexScanner:
             # Fetch URL
             start_time = time.time()
             html, headers, status_code = await self._fetch_url(url)
+            if status_code == 0:
+                raise RuntimeError('HTTP response unavailable; URL was not assessed')
             response_time = time.time() - start_time
             
             # Cache response
@@ -2368,7 +2145,7 @@ class CortexScanner:
             )
             
             # AI-based detection
-            ai_vuln = await self.ai_detector.analyze_response(url, html, headers)
+            ai_vuln = None  # No automatic response-body submission to an external AI provider
             if ai_vuln:
                 if not isinstance(vuln_results, list):
                     vuln_results = []
@@ -2390,7 +2167,7 @@ class CortexScanner:
     async def _fetch_url(self, url: str) -> Tuple[Optional[str], Dict, int]:
         """Fetch URL with error handling"""
         try:
-            async with self.session.get(url, ssl=False) as response:
+            async with self.session.get(url, ssl=False, allow_redirects=False) as response:
                 text = await response.text(errors='ignore')
                 headers = dict(response.headers)
                 return text, headers, response.status
@@ -2414,31 +2191,32 @@ class CortexScanner:
             async with async_playwright() as p:
                 browser = await p.chromium.launch(headless=True)
                 page = await browser.new_page()
+                async def restrict(route):
+                    if self._is_in_scope(route.request.url):
+                        await route.continue_()
+                    else:
+                        await route.abort()
+                await page.route('**/*', restrict)
                 try:
                     response = await page.goto(url, wait_until='networkidle', timeout=30000)
                     content = await page.content()
                     status = response.status if response else 200
-                    await browser.close()
                     return content, {}, status
                 except Exception as e:
-                    await browser.close()
                     return None, {}, 0
+                finally:
+                    await browser.close()
         except Exception as e:
             logger.warning(f"⚠️ Playwright fetch failed: {e}")
             return None, {}, 0
     
     async def _enrich_vulnerability(self, vuln: Vulnerability):
         """Enrich finding with CVE data and AI-generated code patches"""
-        # 1. Base CVE Mapping
-        if vuln.type in CVE_MAP:
-            data = CVE_MAP[vuln.type]
-            vuln.cve_id = data['cve']
-            vuln.cvss_score = data['cvss']
-            if not vuln.description:
-                vuln.description = data['description']
-        
+        # A generic vulnerability type cannot establish a product/version-specific CVE.
+        # Preserve only detector-provided identifiers; no guessed CVE/CVSS mapping.
+
         # 2. AI Remediation Patch Generation
-        if self.ai_detector.model:
+        if getattr(self, 'allow_ai_enrichment', False) and self.ai_detector.model:
             prompt = f"""
             Act as a Senior Security Engineer. Generate a specific, secure code fix (patch) for the following vulnerability.
             
@@ -2451,7 +2229,7 @@ class CortexScanner:
             """
             try:
                 loop = asyncio.get_event_loop()
-                resp = await loop.run_in_executor(None, lambda: self.ai_detector.model.generate_content(prompt))
+                resp = await loop.run_in_executor(None, lambda: self.ai_detector.model.generate_content(redact_text(prompt)))
                 vuln.remediation_patch = resp.text if resp else "AI failed to generate patch."
             except:
                 vuln.remediation_patch = "Remediation generation failed."
@@ -2471,10 +2249,10 @@ class CortexScanner:
             severity=vulnerability.severity.value,
             confidence=vulnerability.confidence,
             cvss_score=vulnerability.cvss_score,
-            url=vulnerability.url,
-            parameter=vulnerability.parameter,
-            description=vulnerability.description,
-            evidence=vulnerability.evidence[:500],  # Limit length
+            url=redact_text(vulnerability.url),
+            parameter=redact_text(vulnerability.parameter) if vulnerability.parameter else None,
+            description=redact_text(vulnerability.description),
+            evidence='[Raw evidence omitted from persistent storage; inspect the current local session]',  # Limit length
             impact=vulnerability.impact,
             remediation=vulnerability.remediation,
             remediation_patch=vulnerability.remediation_patch,
@@ -2499,9 +2277,12 @@ class CortexScanner:
         """Extract links and add to queue"""
         if not html:
             return
+        depth = getattr(self, '_url_depths', {}).get(base_url, 0)
+        if depth >= self.config.max_depth:
+            return
         
         # Extract links
-        pattern = r'href=["\'](https?://[^"\']+)["\']'
+        pattern = r'href=["\']([^"\']+)["\']'
         links = re.findall(pattern, html, re.I)
         
         for link in links:
@@ -2518,6 +2299,7 @@ class CortexScanner:
             
             # Add to queue with priority
             self.visited_urls.add(normalized)
+            self._url_depths[normalized] = depth + 1
             priority = 1 if '?' in normalized else 5
             await self.url_queue.put((priority, normalized))
     
@@ -2558,12 +2340,16 @@ class CortexScanner:
     def _is_in_scope(self, url: str) -> bool:
         """Check if URL is in scan scope"""
         try:
-            target_domain = tldextract.extract(self.config.target_url).registered_domain
-            url_domain = tldextract.extract(url).registered_domain
-            return url_domain == target_domain
-        except:
+            def origin(value):
+                parsed = urlparse(value)
+                if parsed.scheme not in ('http', 'https') or not parsed.hostname or parsed.username or parsed.password:
+                    return None
+                return (parsed.scheme.lower(), parsed.hostname.lower(), parsed.port or (443 if parsed.scheme == 'https' else 80))
+            target, candidate = origin(self.config.target_url), origin(url)
+            return bool(target and candidate and target == candidate)
+        except ValueError:
             return False
-    
+
     def _get_default_headers(self) -> Dict:
         """Get default HTTP headers"""
         headers = {
@@ -2587,7 +2373,7 @@ class CortexScanner:
         """Log HTTP request to database"""
         log = AuditLog(
             scan=self.scan_record,
-            url=url,
+            url=redact_text(url),
             method=method,
             status_code=status_code,
             response_time=response_time
@@ -2733,14 +2519,5 @@ def main():
             loop.close()
 
 if __name__ == "__main__":
-    # Clean old files
-    for pattern in ["report_*.html", "report_*.json", "report_*.pdf", "report_*.csv"]:
-        for file in glob.glob(pattern):
-            try:
-                os.remove(file)
-                print(f"🗑️ Cleaned: {file}")
-            except:
-                pass
-    
-    # Run scanner
+    # Existing reports belong to the user; never delete them on startup.
     main()

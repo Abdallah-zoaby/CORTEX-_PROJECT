@@ -58,3 +58,7 @@ Thumbs.db
 
 # Local dependencies used only for audit and regression tests
 .audit_deps/
+# Local document-generation intermediates
+/tmp/pdfs/
+# Sanitized local evaluation output
+/output/evaluation/

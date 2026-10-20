@@ -3,9 +3,8 @@ import argparse
 import asyncio
 import os
 import glob
-from .main import TitaniumScannerV15
+from .main import TitaniumScannerV15, ScanConfig, ScanMode
 from .server import WebInterface
-from .data.types import ScanConfig, ScanMode
 
 def main():
     """Command-line interface"""
@@ -69,14 +68,5 @@ def main():
         parser.print_help()
 
 if __name__ == "__main__":
-    # Clean old files
-    for pattern in ["report_*.html", "report_*.json", "report_*.pdf", "report_*.csv"]:
-        for file in glob.glob(pattern):
-            try:
-                os.remove(file)
-                print(f"🗑️ Cleaned: {file}")
-            except:
-                pass
-    
-    # Run scanner
+    # Existing reports belong to the user; never delete them on startup.
     main()

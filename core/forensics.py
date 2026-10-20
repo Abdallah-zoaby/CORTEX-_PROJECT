@@ -22,7 +22,7 @@ def check_digital_signature(file_path):
     return result.get('status') == 'Valid'
 
 
-def scan_suspicious_files(directory, max_files=15, inspector=None):
+def scan_suspicious_files(directory, max_files=15, inspector=None, control=None):
     """Compatibility name: returns observations, including explicit unknowns.
 
     This is a bounded sample, not a full-volume antivirus scan.
@@ -31,9 +31,15 @@ def scan_suspicious_files(directory, max_files=15, inspector=None):
     results = []
     ignored = {'node_modules', '.git', 'venv', '.venv', '__pycache__', '.audit_deps',
                'cache', 'code cache', 'gpu_cache'}
-    for root, dirs, files in os.walk(directory, followlinks=False):
+    def unavailable(error):
+        raise error
+    for root, dirs, files in os.walk(directory, followlinks=False, onerror=unavailable):
+        if control:
+            control.checkpoint()
         dirs[:] = sorted(d for d in dirs if d.lower() not in ignored and not d.startswith('.'))
         for name in sorted(files):
+            if control:
+                control.checkpoint()
             if len(results) >= max_files:
                 return results
             if name.lower().endswith(('.exe', '.dll', '.bat', '.ps1', '.vbs')):

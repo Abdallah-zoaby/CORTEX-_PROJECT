@@ -5,6 +5,7 @@ from pathlib import Path
 import threading
 from urllib.parse import urlsplit
 import uuid
+from core.lifecycle import ScanControl, ScanStopped
 
 logger = logging.getLogger("TitaniumScanner")
 
@@ -40,7 +41,7 @@ class ScannerWebInterface:
                 if not isinstance(target, str):
                     raise ValueError()
                 parsed = urlsplit(target)
-                if parsed.scheme not in ('http', 'https') or not parsed.hostname:
+                if parsed.scheme not in ('http', 'https') or not parsed.hostname or parsed.username or parsed.password:
                     raise ValueError()
                 parsed.port  # Validate malformed port values too.
                 depth = data.get('max_depth', 5)
@@ -49,7 +50,7 @@ class ScannerWebInterface:
                     if isinstance(value, bool) or not isinstance(value, (int, str)):
                         raise ValueError()
                 depth, concurrency = int(depth), int(concurrency)
-                if depth < 0 or concurrency < 1:
+                if not 0 <= depth <= 10 or not 1 <= concurrency <= 50:
                     raise ValueError()
                 config = self._config_factory(
                     target_url=target, mode=self._mode_factory(data.get('mode', 'safe')),
@@ -60,7 +61,15 @@ class ScannerWebInterface:
 
             job_id = 'SCAN-' + uuid.uuid4().hex
             with self._lock:
-                self._jobs[job_id] = dict(status='queued', progress=0.0, report=None)
+                if sum(job['status'] in ('queued', 'running') for job in self._jobs.values()) >= 2:
+                    return jsonify(error='Two assessments are already active; wait or cancel one'), 429
+                while len(self._jobs) >= 100:
+                    stale = next((key for key, job in self._jobs.items() if job['status'] not in ('queued', 'running')), None)
+                    if stale is None:
+                        break
+                    del self._jobs[stale]
+                self._jobs[job_id] = dict(status='queued', progress=0.0, report=None,
+                                          control=ScanControl(max_seconds=300))
             try:
                 threading.Thread(target=self._run_scan_in_thread,
                                  args=(config, job_id), daemon=True).start()
@@ -90,6 +99,17 @@ class ScannerWebInterface:
                 return jsonify(status=snapshot['status'], error='Report unavailable'), 409
             return Response(snapshot['report'], mimetype='text/html')
 
+        @app.post('/cancel/<scan_id>')
+        def cancel_scan(scan_id):
+            with self._lock:
+                job = self._jobs.get(scan_id)
+                if job is None:
+                    return jsonify(error='Unknown scan'), 404
+                if job['status'] not in ('queued', 'running'):
+                    return jsonify(error='Assessment already finished', status=job['status']), 409
+                job['control'].cancel()
+            return jsonify(status='cancellation_requested'), 202
+
         return app
 
     def _update(self, job_id, **values):
@@ -110,11 +130,15 @@ class ScannerWebInterface:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             self._update(job_id, status='running')
+            control = self._jobs[job_id]['control']
+            control.checkpoint()
             scanner = self._scanner_factory(config)
-            result = loop.run_until_complete(scanner.scan())
+            result = loop.run_until_complete(scanner.scan(control=control))
             report = scanner.report_generator.generate(result, format='html')
             Path(f'report_{job_id}.html').write_text(report, encoding='utf-8')
             self._update(job_id, status='completed', progress=1.0, report=report)
+        except ScanStopped as stopped:
+            self._update(job_id, status=stopped.status)
         except Exception:
             logger.exception('Scan job %s failed', job_id)
             self._update(job_id, status='failed')
