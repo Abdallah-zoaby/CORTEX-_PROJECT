@@ -175,6 +175,26 @@ class SystemIntegrationTests(unittest.TestCase):
                              'tab_enterprise', 'tab_mobile_api'):
                     self.assertTrue(getattr(app, name).winfo_exists())
                 app.render_charts()
+                self.assertIsNone(app.gauge_threat.value)
+                self.assertEqual(app.stat_health.cget('text'), 'N/A')
+                alert = dict(type='PATH_ANOMALY', severity='HIGH', source='synthetic.exe',
+                             pid=123, details='Synthetic AppData observation')
+                with patch.object(app.behavior_engine, 'find_suspicious_processes', return_value=[alert]):
+                    app.monitor_behavior()
+                    app.monitor_behavior()
+                self.assertEqual(app.stat_high.cget('text'), '0')
+                self.assertIn('Live heuristic alerts: 1', app.analytics_status.cget('text'))
+                self.assertIsNone(app.gauge_threat.value)
+                finding = dict(type='SQL Injection', severity='MEDIUM', url='http://local/')
+                app._set_analytics_findings('web', [finding, finding])
+                app._set_analytics_findings('web', [finding])
+                self.assertEqual(app.stat_high.cget('text'), '1')
+                self.assertEqual(app.gauge_threat.value, 3)
+                self.assertEqual(app.gauge_health.value, 97)
+                self.assertEqual(app.stat_health.cget('text'), '97/100')
+                with patch.object(app.scanner.alerts, 'trigger'):
+                    app._on_intrusion_detected('CRITICAL', 'Synthetic simulation')
+                self.assertEqual(app.gauge_threat.value, 3)
             finally:
                 app.scanner.db_session.close()
                 app.destroy()

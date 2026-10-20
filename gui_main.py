@@ -11,6 +11,7 @@ import math
 import google.generativeai as genai
 from engine.scanner.main import CortexScanner, ScanConfig, ScanMode, VulnerabilityType, SeverityLevel
 from engine.cortex import CortexScanner as SystemScanner
+from core.analytics import AnalyticsState
 from engine.scanner.main import PortScanner, SubdomainEnumerator, BruteForceEngine, SSLTLSAnalyzer, JSSecretsAnalyzer
 try:
     from simulation.ransom import RansomSim
@@ -44,9 +45,10 @@ ctk.set_default_color_theme("dark-blue")
 # ================= VISUAL COMPONENTS =================
 class SecurityGauge(ctk.CTkFrame):
     """Custom animated gauge for security metrics"""
-    def __init__(self, master, title, color="#238636", **kwargs):
+    def __init__(self, master, title, color="#238636", suffix="%", **kwargs):
         super().__init__(master, fg_color="transparent", **kwargs)
         self.color = color
+        self.suffix = suffix
         self.value = 0
         
         self.canvas = ctk.CTkCanvas(self, width=160, height=100, bg="#161b22", highlightthickness=0)
@@ -65,9 +67,9 @@ class SecurityGauge(ctk.CTkFrame):
         # Background arc
         self.canvas.create_arc(10, 20, 150, 160, start=0, extent=180, outline="#30363d", width=12, style="arc", tags="gauge")
         # Value arc
-        extent = (percent / 100) * 180
+        extent = ((percent or 0) / 100) * 180
         self.canvas.create_arc(10, 20, 150, 160, start=180, extent=-extent, outline=self.color, width=12, style="arc", tags="gauge")
-        self.lbl_val.configure(text=f"{int(percent)}%")
+        self.lbl_val.configure(text='N/A' if percent is None else f"{int(percent)}{self.suffix}")
         self.value = percent
 
     def set_value(self, val):
@@ -275,10 +277,10 @@ class CortexProApp(ctk.CTk):
         self.header_frame.grid(row=0, column=0, padx=20, pady=20, sticky="ew")
         self.header_frame.grid_columnconfigure((0,1,2,3), weight=1)
 
-        self.stat_critical = self.create_hud_stat("CRITICAL THREATS", "0", self.colors["danger"], 0)
-        self.stat_high = self.create_hud_stat("IDENTIFIED RISKS", "0", self.colors["warning"], 1)
-        self.stat_health = self.create_hud_stat("SYSTEM HEALTH", "100%", self.colors["accent"], 2)
-        self.stat_compliance = self.create_hud_stat("COMPLIANCE", "100%", "#1f6feb", 3)
+        self.stat_critical = self.create_hud_stat("CRITICAL FINDINGS", "0", self.colors["danger"], 0)
+        self.stat_high = self.create_hud_stat("AUDIT FINDINGS", "0", self.colors["warning"], 1)
+        self.stat_health = self.create_hud_stat("POSTURE INDEX", "100%", self.colors["accent"], 2)
+        self.stat_compliance = self.create_hud_stat("AUDIT SCORE", "100%", "#1f6feb", 3)
 
         # Tabs System
         self.tabs = ctk.CTkTabview(self.main_area, fg_color="#161b22", segmented_button_fg_color="#0d1117", segmented_button_selected_color=self.colors["accent"], command=self._on_tab_change)
@@ -319,7 +321,8 @@ class CortexProApp(ctk.CTk):
             self.activity_lbls.append(lbl)
         
         # Scanner & State Initialization
-        self.findings_count = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
+        self.analytics = AnalyticsState()
+        self.findings_count = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0, "INFO": 0}
         self.vuln_type_count = {"SQLI": 0, "XSS": 0, "LFI": 0, "SENSITIVE": 0, "OTHER": 0}
         self.risk_score = 100
         self.scan_results = None
@@ -345,6 +348,9 @@ class CortexProApp(ctk.CTk):
         self.setup_sim_tab()
         self.setup_enterprise_tab()
         self.setup_mobile_api_tab()
+        self.stat_health.configure(text='N/A')
+        self.stat_compliance.configure(text='N/A')
+        self._refresh_analytics()
 
         # Start Dynamic Elements
         self.after(500, self.run_startup_sequence)
@@ -948,9 +954,18 @@ class CortexProApp(ctk.CTk):
             
         # Update Compliance Score
         comp_score = max(0, 100 - (len(dns) * 20 + serious_assets * 5 + len(tasks) * 2))
-        self.after(0, lambda: self.stat_compliance.configure(text=f"{comp_score}%"))
-        self.after(0, lambda: self.gauge_network.set_value(comp_score))
-        self.after(0, lambda: self.gauge_network.lbl_title.configure(text="COMPLIANCE"))
+        self.stat_compliance.configure(text=f"{comp_score}/100")
+        network_risk = min(100, len(dns) * 20 + sum(15 for _, _, severity in ports if severity == 'CRITICAL'))
+        self.gauge_network.set_value(network_risk)
+        findings = [dict(severity=p['severity'], type='System observation',
+                         item=f"{p['pid']}:{p['reason']}") for p in procs]
+        findings += [dict(severity='HIGH', type='Startup risk', item=s['path'])
+                     for s in startups if s['risk'] == 'HIGH']
+        findings += [dict(severity=severity, type='Network port', item=f'{port}:{desc}')
+                     for port, desc, severity in ports if severity != 'INFO']
+        findings += [dict(severity='HIGH', type='DNS integrity', item=item) for item in dns]
+        findings += [dict(severity='HIGH', type='Scheduled task', item=item) for item in tasks]
+        self._set_analytics_findings('enterprise', findings)
 
         self.btn_ent_audit.configure(state="normal", text="🚀 RUN CORPORATE AUDIT")
         self._update_risk_score()
@@ -959,14 +974,15 @@ class CortexProApp(ctk.CTk):
     def monitor_behavior(self):
         """Live Behavioral Threat Hunting Loop"""
         threats = self.behavior_engine.find_suspicious_processes()
-        for threat in threats:
+        for threat in self.analytics.observe(threats):
             msg = f"🛡️ BEHAVIORAL ALERT: {threat['details']} (PROC: {threat['source']})"
             self.log(self.console, msg, "CRITICAL" if threat['severity'] == "CRITICAL" else "WARNING")
-            self.update_stats(threat['severity'], threat.get('type', threat.get('details', 'OTHER')))
             
             # Specifically for Dashboard
             if hasattr(self, 'activity_lbls'):
                 self.activity_lbls[0].configure(text=f"! ALERT: {threat['details']}", text_color=self.colors["danger"])
+
+        self._refresh_analytics()
 
         # Loop every 5 seconds
         self.after(5000, self.monitor_behavior)
@@ -1033,8 +1049,7 @@ class CortexProApp(ctk.CTk):
         
         for f in findings + secrets:
             self.log(self.apk_output, f"  [!] {f['type']}: {f['item']}", f['severity'])
-            self.update_stats(f.get('severity', 'HIGH'), f.get('type'))
-        self.log(self.apk_output, "✅ Mobile Audit Complete.", "SUCCESS")
+        self.log(self.apk_output, "Demo findings only: no APK analysis was performed.", "INFO")
 
     def run_api_audit(self):
         url = self.api_url_entry.get() or "http://127.0.0.1:5555"
@@ -1044,10 +1059,14 @@ class CortexProApp(ctk.CTk):
         findings = auditor.audit_full()
         for f in findings:
             self.log(self.api_output, f"  [!] {f['type']}: {f['item']}", f['severity'])
-            self.update_stats(f['severity'], f.get('type'))
-            
-        self.log(self.api_output, "✅ API Audit Complete. Critical holes found.", "CRITICAL")
-        self._update_risk_score()
+        # audit_full includes a synthetic JWT example; exclude it from assessed risk.
+        measured = [f for f in findings if f['type'] not in ('JWT_WEAK_CRYPTO', 'JWT_VULNERABILITY')]
+        if measured:
+            self._set_analytics_findings('api', measured)
+        else:
+            self.analytics.sources.pop('api', None)
+            self._refresh_analytics()
+        self.log(self.api_output, "API audit complete; results are observations requiring validation.", "INFO")
 
     def update_threat_intel(self):
         """Fetch and display latest security news"""
@@ -1083,21 +1102,25 @@ class CortexProApp(ctk.CTk):
         gauge_frame = ctk.CTkFrame(container, fg_color="#161b22", height=200)
         gauge_frame.pack(fill="x", pady=(0, 20))
         
-        self.gauge_threat = SecurityGauge(gauge_frame, "THREAT LEVEL", self.colors["danger"])
+        self.gauge_threat = SecurityGauge(gauge_frame, "RISK INDEX", self.colors["danger"], suffix='/100')
         self.gauge_threat.pack(side="left", expand=True, padx=20, pady=10)
         
-        self.gauge_health = SecurityGauge(gauge_frame, "SYSTEM INTEGRITY", self.colors["accent"])
+        self.gauge_health = SecurityGauge(gauge_frame, "POSTURE INDEX", self.colors["accent"], suffix='/100')
         self.gauge_health.pack(side="left", expand=True, padx=20, pady=10)
-        self.gauge_health.set_value(100)
+        self.gauge_health.set_value(None)
+        self.gauge_threat.set_value(None)
         
-        self.gauge_network = SecurityGauge(gauge_frame, "NETWORK RISK", self.colors["warning"])
+        self.gauge_network = SecurityGauge(gauge_frame, "NETWORK RISK INDEX", self.colors["warning"], suffix='/100')
         self.gauge_network.pack(side="left", expand=True, padx=20, pady=10)
+        self.gauge_network.set_value(None)
+        self.analytics_status = ctk.CTkLabel(container, text='No audit yet', text_color=self.colors['text'])
+        self.analytics_status.pack(fill='x', pady=(0, 10))
 
         # Lower distribution charts (Custom drawn bars)
         dist_frame = ctk.CTkFrame(container, fg_color="#161b22")
         dist_frame.pack(fill="both", expand=True)
         
-        ctk.CTkLabel(dist_frame, text="🛡️ VULNERABILITY DISTRIBUTION", font=self.fonts["sub"], text_color=self.colors["accent"]).pack(pady=10)
+        ctk.CTkLabel(dist_frame, text="🛡️ AUDIT FINDING DISTRIBUTION", font=self.fonts["sub"], text_color=self.colors["accent"]).pack(pady=10)
         
         self.charts_canvas = ctk.CTkCanvas(dist_frame, bg="#161b22", highlightthickness=0)
         self.charts_canvas.pack(fill="both", expand=True, padx=40, pady=20)
@@ -1144,25 +1167,7 @@ class CortexProApp(ctk.CTk):
             self.charts_canvas.create_text(x0 + bar_width/2, y1-15, text=str(val), fill=self.colors["text"], font=("JetBrains Mono", 12), tags="bar")
 
     def record_vuln_type(self, vuln_type):
-        """Classify vulnerability type into SQLI / XSS / LFI / SENSITIVE / OTHER and increment self.vuln_type_count"""
-        if hasattr(vuln_type, 'value'):
-            type_str = f"{vuln_type.value} {getattr(vuln_type, 'name', '')}".lower()
-        else:
-            type_str = str(vuln_type).lower() if vuln_type is not None else ""
-
-        if "sql" in type_str:
-            category = "SQLI"
-        elif "xss" in type_str or "cross-site scripting" in type_str or "cross site scripting" in type_str:
-            category = "XSS"
-        elif "lfi" in type_str or "local file inclusion" in type_str or "path traversal" in type_str:
-            category = "LFI"
-        elif any(k in type_str for k in ["secret", "api key", "apikey", "sensitive", "exposed"]):
-            category = "SENSITIVE"
-        else:
-            category = "OTHER"
-
-        self.vuln_type_count[category] = self.vuln_type_count.get(category, 0) + 1
-        self.after(0, self.render_charts)
+        self.update_stats('INFO', vuln_type)
 
     def update_network_map(self, url):
         """Enhanced Dynamic Network Map with animated connections"""
@@ -1197,25 +1202,32 @@ class CortexProApp(ctk.CTk):
         pass
 
     def update_stats(self, level, vuln_type=None):
-        if vuln_type is not None:
-            self.record_vuln_type(vuln_type)
-        if level in ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]:
-            if level == "CRITICAL": self.findings_count["CRITICAL"] += 1
-            elif level == "HIGH": self.findings_count["HIGH"] += 1
-            
-            self.stat_critical.configure(text=str(self.findings_count["CRITICAL"]))
-            self.stat_high.configure(text=str(self.findings_count["HIGH"]))
-            
-            # Health Calculation
-            total_threats = self.findings_count["CRITICAL"] * 15 + self.findings_count["HIGH"] * 5
-            health = max(0, 100 - total_threats)
-            color = self.colors["accent"] if health > 80 else (self.colors["warning"] if health > 50 else self.colors["danger"])
-            self.stat_health.configure(text=f"{health}%", text_color=color)
-            
-            # Update Gauges & Charts
-            self.after(0, lambda: self.gauge_threat.set_value(min(100, (100 - health) * 1.5)))
-            self.after(0, lambda: self.gauge_health.set_value(health))
-            self.after(0, self.render_charts)
+        # Compatibility for isolated manual observations; repeated calls deduplicate.
+        if not hasattr(self, '_manual_findings'):
+            self._manual_findings = {}
+        self._manual_findings[(level, str(vuln_type))] = dict(severity=level, type=vuln_type)
+        self._set_analytics_findings('manual', self._manual_findings.values())
+
+    def _set_analytics_findings(self, source, findings):
+        self.analytics.replace(source, findings)
+        self._refresh_analytics()
+
+    def _refresh_analytics(self):
+        state = self.analytics.snapshot()
+        self.findings_count = state['levels']
+        self.vuln_type_count = state['types']
+        self.risk_score = state['posture']
+        self.stat_critical.configure(text=str(self.findings_count['CRITICAL']))
+        self.stat_high.configure(text=str(state['total']))
+        color = self.colors['text'] if self.risk_score is None else (
+            self.colors['danger'] if self.risk_score < 40 else
+            self.colors['warning'] if self.risk_score < 75 else self.colors['accent'])
+        self.stat_health.configure(text='N/A' if self.risk_score is None else f'{self.risk_score}/100', text_color=color)
+        self.gauge_threat.set_value(state['risk'])
+        self.gauge_health.set_value(state['posture'])
+        assessment = 'No audit yet' if not state['assessed'] else 'Latest audit snapshots; index is not a probability'
+        self.analytics_status.configure(text=f"{assessment} | Live heuristic alerts: {state['live']} (unconfirmed)")
+        self.render_charts()
 
     # --- MAIN SCAN ---
     def start_scan_thread(self):
@@ -1233,6 +1245,7 @@ class CortexProApp(ctk.CTk):
             )
 
             def complete():
+                self._set_analytics_findings('system', self.scan_results.findings)
                 self.log(self.console, "Scan Complete. Triggering AI Analysis...", "SUCCESS")
                 self.btn_pdf.configure(state="normal", fg_color="#3fb950")
                 self.ask_ai_analyst()
@@ -1292,13 +1305,12 @@ class CortexProApp(ctk.CTk):
                 state="normal", text="🚀 LAUNCH AUDIT"))
 
     def analyze_web_findings(self):
+        self._set_analytics_findings('web', self.web_findings)
         if not self.web_findings: 
             self.log(self.web_console, "No vulnerabilities found.", "SUCCESS")
             return
         
         for vuln in self.web_findings:
-            vuln_type = vuln.type.value if hasattr(vuln.type, 'value') else vuln.type
-            self.update_stats(vuln.severity.value, vuln_type)
             card = VulnerabilityCard(self.web_ai_panel, vuln)
             card.pack(fill="x", padx=10, pady=5)
             
@@ -1307,21 +1319,7 @@ class CortexProApp(ctk.CTk):
         self.web_ai_panel._parent_canvas.yview_moveto(1.0)
 
     def _update_risk_score(self):
-        """Dynamic Risk Scoring Algorithm"""
-        base = 100
-        deductions = (
-            self.findings_count["CRITICAL"] * 15 +
-            self.findings_count["HIGH"] * 8 +
-            self.findings_count["MEDIUM"] * 3
-        )
-        self.risk_score = max(0, base - deductions)
-        # Update Dashboard HUD if exists
-        try:
-            self.stat_health.configure(text=f"{self.risk_score}%")
-            if self.risk_score < 40: self.stat_health.configure(text_color=self.colors["danger"])
-            elif self.risk_score < 75: self.stat_health.configure(text_color=self.colors["warning"])
-            else: self.stat_health.configure(text_color=self.colors["success"])
-        except: pass
+        self._refresh_analytics()
 
     # --- AI ANALYST ---
     def ask_ai_analyst(self):
@@ -1504,10 +1502,9 @@ class CortexProApp(ctk.CTk):
         self._on_intrusion_detected("CRITICAL", "Ransomware Simulation Active")
 
     def _on_intrusion_detected(self, level, msg, vuln_type="OTHER"):
-        """Unified method to trigger alerts and update stats from any module"""
-        self.update_stats(level, vuln_type)
-        self.scanner.alerts.trigger("INTRUSION DETECTED", msg, level)
-        self.log(self.console, f"🚨 INTRUSION: {msg}", level)
+        """Simulation events remain visible without changing audited risk."""
+        self.scanner.alerts.trigger("SIMULATION", msg, level)
+        self.log(self.console, f"SIMULATION: {msg}", level)
 
     def run_dlaas(self):
         self.log(self.sim_console, "Simulating Data Exfiltration...", "HIGH")
