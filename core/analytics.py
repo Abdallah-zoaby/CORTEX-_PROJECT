@@ -46,7 +46,7 @@ class AnalyticsState:
             if severity not in LEVELS:
                 continue
             classification = field(finding, 'classification')
-            eligible = classification not in ('observation', 'unknown', 'configuration_observation')
+            eligible = classification not in ('observation', 'unknown', 'configuration_observation', 'simulation')
             if classification == 'engine_detection' and field(finding, 'activity') != 'active':
                 eligible = False
             key = identity(finding) + (field(finding, 'path'), field(finding, 'detection_id'))
@@ -67,7 +67,7 @@ class AnalyticsState:
         findings = [f for f in findings if f['eligible']]
         levels = Counter(f['severity'] for f in findings)
         types = Counter(f['category'] for f in findings)
-        assessed = bool(set(self.sources) - self.unassessed_sources)
+        assessed = bool(self.sources) and not self.unassessed_sources
         risk = min(100, sum(levels[level] * weight for level, weight in (
             ('CRITICAL', 15), ('HIGH', 8), ('MEDIUM', 3), ('LOW', 1))))
         return {

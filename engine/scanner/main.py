@@ -261,6 +261,8 @@ Session = sessionmaker(bind=engine)
 def init_database():
     """Initialize database with proper error handling"""
     try:
+        from .data.migrations import upgrade_legacy_schema
+        upgrade_legacy_schema(engine)
         Base.metadata.create_all(engine)
         logger.info("✅ Database initialized successfully")
         
@@ -429,18 +431,7 @@ class ThreatIntelManager:
 
     def check_ip_reputation(self, ip: str) -> Dict:
         """Proactive IP Reputation Checking (Elite Corporate Feature)"""
-        # Mocked reputation database
-        bad_ips = {
-            "185.220.101.": "Tor Exit Node (Malicious Activity)",
-            "45.227.253.": "Known SSH Brute Forcer",
-            "103.149.162.": "C2 Malware Infrastructure",
-            "127.0.0.1": "Localhost (Safe)"
-        }
-        
-        for prefix, reason in bad_ips.items():
-            if ip.startswith(prefix):
-                return {"status": "MALICIOUS", "reason": reason, "severity": "CRITICAL"}
-        return {"status": "CLEAN", "reason": "No historical matches in global blacklist", "severity": "INFO"}
+        return {"status": "UNKNOWN", "reason": "No verified reputation provider configured; IP address alone is not a verdict", "severity": "INFO"}
 
     def get_known_attack_patterns(self) -> List[Dict]:
         """Returns complex patterns for behavioral engine matching"""
@@ -578,48 +569,8 @@ class WindowsForensics:
         except: return []
 
     async def _ai_summarize(self, data: Dict) -> str:
-        """Comprehensive AI forensic report"""
-        if not self.ai.model:
-            return self._build_text_report(data)
-            
-        # Build a clean text summary to avoid token overload
-        summary_input = {
-            "system": data.get('system', {}),
-            "failed_logins_count": len(data.get('failed_logins', [])),
-            "failed_logins_sample": data.get('failed_logins', [])[:3],
-            "suspicious_procs": data.get('suspicious_procs', [])[:5],
-            "external_connections": [
-                c for c in data.get('active_connections', [])
-                if not c['remote'].startswith(('192.168.', '10.', '127.'))
-            ][:10],
-            "startup_programs_count": len(data.get('startup_programs', [])),
-            "non_ms_tasks": len(data.get('scheduled_tasks', []))
-        }
-        
-        prompt = f"""
-        Explain the supplied system observations and their limitations. Do not claim professional certification, malware, active compromise or safety from path, CPU, unsigned code or missing data alone. Cite the evidence source; AI output is explanatory only.
-        
-        System Data:
-        {json.dumps(summary_input, indent=2)}
-        
-        Format your response in Arabic with:
-        ## 🔴 خلاصة التهديدات
-        (Short threat summary, severity level: Critical/High/Medium/Low)
-        
-        ## 📊 النتائج التفصيلية
-        (Bullet points for each suspicious finding)
-        
-        ## 🛡️ التوصيات العاجلة
-        (Top 3 immediate action items)
-        
-        Be precise. If no corroborated findings exist, say no active engine detection was supplied; this is not proof of safety. Never invent evidence or recommend automatic deletion.
-        """
-        try:
-            loop = asyncio.get_event_loop()
-            resp = await loop.run_in_executor(None, lambda: self.ai.model.generate_content(prompt))
-            return resp.text if resp else self._build_text_report(data)
-        except Exception as e:
-            return self._build_text_report(data)
+        """Legacy collection never submits local forensic data to a provider."""
+        return self._build_text_report(data)
 
     def _build_text_report(self, data: Dict) -> str:
         """Fallback text report if AI unavailable"""
@@ -644,19 +595,19 @@ class AIMLDetector:
         """Load Gemini models"""
         try:
             # Try to get key from env or config
-            api_key = os.getenv('TITANIUM_AI_KEY') or CONFIG.get('ENCRYPTION_KEY') # Fallback to encryption key if user reused it (not recommended but possible) 
+            api_key = os.getenv('TITANIUM_AI_KEY')
             # Better to rely on TITANIUM_AI_KEY env var set by GUI or user
             
             if not api_key:
                  # Check if we can find it in a .env file or local storage
                  pass
 
-            if api_key:
+            if api_key and os.getenv('TITANIUM_AI_MODEL'):
                 genai.configure(api_key=api_key)
-                self.model = genai.GenerativeModel('gemini-pro')
-                logger.info("🤖 AI/ML detector initialized (Gemini Pro)")
+                self.model = genai.GenerativeModel(os.environ['TITANIUM_AI_MODEL'])
+                logger.info("Optional AI explanation provider configured")
             else:
-                logger.warning("⚠️ AI Key not found. AI features running in limited mode.")
+                logger.warning("⚠️ AI explanation unavailable: set TITANIUM_AI_KEY and TITANIUM_AI_MODEL.")
         except Exception as e:
             logger.warning(f"⚠️ AI/ML not available: {e}")
     

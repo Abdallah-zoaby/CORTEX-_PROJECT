@@ -48,6 +48,7 @@ class PurpleController:
     def log_event(self, actor, action, details, severity="INFO"):
         """Central Timeline Logging"""
         event = {
+            "classification": "simulation",
             "time": datetime.now().strftime("%H:%M:%S"),
             "actor": actor,
             "action": action,
@@ -59,7 +60,11 @@ class PurpleController:
 
     def run_simulation(self, target_ip="127.0.0.1", ui_callback=None):
         """Executes the closed-loop battle"""
-        self.log_event("SYSTEM", "INIT", f"Starting Purple Team Exercise against {target_ip}", "INFO")
+        self.timeline = []
+        self.risk_score = 0
+        self.blue_ueba = UEBAEngine()
+        self.blue_soar = AutoResponseEngine()
+        self.log_event("SYSTEM", "INIT", f"SYNTHETIC training for {target_ip}; no requests, isolation or firewall changes", "INFO")
         if ui_callback: ui_callback(self.timeline[-1])
         
         for agent in self.agents:
@@ -91,7 +96,7 @@ class PurpleController:
                 # 3. BLUE RESPONSE (SOAR)
                 time.sleep(1)
                 self.blue_soar.process_ueba_alert(alert)
-                self.log_event("🟦 BLUE", "RESPONSE", f"Isolated endpoint & Blocked IP {target_ip}", "SUCCESS")
+                self.log_event("🟦 BLUE", "RESPONSE", f"SIMULATED response for {target_ip}; no endpoint isolated or IP blocked", "INFO")
                 if ui_callback: ui_callback(self.timeline[-1])
                 break # Attack halted by defense
                 

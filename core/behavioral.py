@@ -43,21 +43,26 @@ class SIEMReporter:
     
     @staticmethod
     def generate_json_report(findings, system_stats):
+        from .findings import normalize, summary
+        from .privacy import sanitize
+        records = [normalize(f, 'web' if hasattr(f, 'url') else 'host') for f in findings]
         report = {
             "version": "16.0.0-ENTERPRISE",
             "origin": "CORTEX-SOC-ENGINE",
             "generated_at": datetime.now().isoformat(),
             "summary": {
-                "total_threats": len(findings),
-                "risk_score": system_stats.get('risk_score', 100)
+                **summary(records),
+                "posture_index": system_stats.get('posture_index'),
+                "limitations": "Counts describe collected records, not confirmed threats or a safety certificate"
             },
-            "events": findings,
+            "events": records,
+            "coverage": system_stats.get('coverage', {}),
             "host_info": {
                 "os": "Windows",
                 "uptime": datetime.fromtimestamp(psutil.boot_time()).isoformat()
             }
         }
-        return json.dumps(report, indent=4, ensure_ascii=False)
+        return json.dumps(sanitize(report), indent=4, ensure_ascii=False)
 
 # Example Usage logic
 def check_ransomware_risk(file_path):

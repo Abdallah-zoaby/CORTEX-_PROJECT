@@ -35,7 +35,7 @@ def run_qa():
     print("\n[+] Testing Digital Twin...")
     try:
         import time
-        twin = DigitalTwinTarget()
+        twin = DigitalTwinTarget(port=0)
         twin.start()
         time.sleep(1)
         print(f"  - Twin Thread Started OK ({twin.get_url()})")
@@ -46,8 +46,8 @@ def run_qa():
     # 3. Test API & Mobile Auditors
     print("\n[+] Testing API & Mobile Scanners...")
     try:
-        api_scan = APIAuditor("http://127.0.0.1:5555").audit_full()
-        print(f"  - API Auditor OK ({len(api_scan)} findings simulated)")
+        api_scan = APIAuditor(twin.get_url()).audit_full()
+        print(f"  - API Auditor OK ({len(api_scan)} endpoint observations)")
         
         # Test hardcoded secrets mock
         mobile = MobileAPKAuditor()
@@ -58,6 +58,8 @@ def run_qa():
         traceback.print_exc()
         print(f"  [!] MOBILE/API AUDITOR ERROR: {e}")
         errors += 1
+
+    twin.stop()
 
     # 4. Test Purple Team Orchestrator
     print("\n[+] Testing Purple Team Orchestrator...")
@@ -79,7 +81,9 @@ def run_qa():
     try:
         sniffer = NetworkAnomalyDetector()
         print(f"  - Scapy Available: {sniffer.scapy_available}")
-        sniffer.start_sniffing(lambda m, c: None)
+        # QA never captures the user's network.
+        sniffer.scapy_available = False
+        assert sniffer.start_sniffing(lambda m, c: None) is False
         sniffer.stop_sniffing()
         print("  - Sniffer Start/Stop OK")
     except Exception as e:
@@ -88,7 +92,7 @@ def run_qa():
 
     print("\n===============================")
     if errors == 0:
-        print("[PASS] QA PASSED: ALL SYSTEMS NOMINAL")
+        print("[PASS] QA PASSED: selected smoke checks completed")
     else:
         print(f"[FAIL] QA FAILED: {errors} MODULES ENCOUNTERED ERRORS")
     return errors

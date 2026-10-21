@@ -474,6 +474,97 @@ class SystemIntegrationTests(unittest.TestCase):
         self.assertEqual(len(second.findings), 1)
         self.assertIsNot(first, second)
 
+
+    def test_advanced_gui_failure_recovery_inputs_and_export(self):
+        with patch.object(self.scanner_module.CortexScanner, 'start_live_monitor'), \
+                patch.object(self.gui.CortexProApp, 'update_threat_intel'), \
+                patch.object(self.gui.CortexProApp, 'run_startup_sequence'):
+            app = self.gui.CortexProApp()
+            try:
+                app.withdraw()
+                from test_advanced_modules import XML
+                app.apk_path.insert(0, XML)
+                with patch.object(self.gui.threading, 'Thread',
+                        side_effect=lambda target, daemon: SimpleNamespace(start=target)):
+                    app.run_apk_audit()
+                    app.update()
+                self.assertEqual(app.btn_apk.cget('state'), 'normal')
+                self.assertIn('android.permission.CAMERA', app.apk_output.get('1.0', 'end'))
+                app.apk_path.delete(0, 'end')
+                app.apk_path.insert(0, 'missing-file.xml')
+                with patch.object(self.gui.threading, 'Thread',
+                        side_effect=lambda target, daemon: SimpleNamespace(start=target)):
+                    app.run_apk_audit()
+                    app.update()
+                self.assertEqual(app._mobile_records[0]['classification'], 'unknown')
+                self.assertEqual(app.btn_apk.cget('state'), 'normal')
+                with patch.object(self.gui.threading, 'Thread',
+                        side_effect=lambda target, daemon: SimpleNamespace(start=target)), \
+                        patch.object(self.gui, 'scan_running_processes', side_effect=OSError('fixture')), \
+                        patch.object(self.gui, 'scan_startup_apps', return_value=[]), \
+                        patch.object(self.gui, 'scan_open_ports', return_value=[(80, 'test HTTP', 'INFO')]), \
+                        patch.object(self.gui, 'check_dns_integrity', return_value=[]), \
+                        patch.object(self.gui, 'scan_scheduled_tasks', return_value=[]):
+                    app.run_enterprise_audit()
+                    app.update()
+                self.assertFalse(app._enterprise_running)
+                self.assertEqual(app.btn_ent_audit.cget('state'), 'normal')
+                self.assertTrue(any(r['classification'] == 'unknown' for r in app._enterprise_records))
+                app.api_url_entry.insert(0, 'http://127.0.0.1')
+                with patch.object(self.gui.messagebox, 'askyesno', return_value=False), \
+                        patch.object(self.gui, 'APIAuditor') as auditor:
+                    app.run_api_audit()
+                    auditor.assert_not_called()
+                with patch.object(self.gui.messagebox, 'askyesno', return_value=True), \
+                        patch.object(self.gui.threading, 'Thread',
+                            side_effect=lambda target, daemon: SimpleNamespace(start=target)), \
+                        patch.object(self.gui.APIAuditor, 'audit_full', side_effect=RuntimeError('fixture')):
+                    app.run_api_audit()
+                    app.update()
+                self.assertEqual(app.btn_api.cget('state'), 'normal')
+                self.assertEqual(app._api_records[0]['classification'], 'unknown')
+                self.assertIsNone(app.risk_score)
+                app.display_evidence([dict(type='Engine detection', classification='engine_detection',
+                    activity='active', severity='HIGH')], dict(assessment_status='cancelled',
+                    defender_status='available', defender_health={'AntivirusEnabled': True}))
+                self.assertEqual(app.findings_count['HIGH'], 1)
+                self.assertIsNone(app.gauge_health.value)
+                exported = Path(self.folder.name) / 'advanced-siem.json'
+                with patch.object(self.gui.filedialog, 'asksaveasfilename', return_value=str(exported)):
+                    app.export_siem_json()
+                report = json.loads(exported.read_text(encoding='utf-8'))
+                self.assertGreaterEqual(report['summary']['unknown'], 3)
+                self.assertTrue(any(r['type'] == 'Listening port' for r in report['events']))
+                with patch.object(app.purple_orchestrator, 'run_simulation', side_effect=RuntimeError('fixture')), \
+                        patch.object(self.gui.threading, 'Thread',
+                            side_effect=lambda target, daemon: SimpleNamespace(start=target)):
+                    app.run_purple_team_sim()
+                    app.update()
+                self.assertFalse(app._purple_running)
+                self.assertEqual(app.btn_purple.cget('state'), 'normal')
+            finally:
+                app.scanner.db_session.close()
+                app.destroy()
+
+    def test_ip_reputation_without_provider_is_unknown(self):
+        manager = self.scanner_module.ThreatIntelManager()
+        for ip in ('127.0.0.1', '185.220.101.1', '192.0.2.1'):
+            self.assertEqual(manager.check_ip_reputation(ip)['status'], 'UNKNOWN')
+
+    def test_legacy_forensics_never_auto_submits_to_ai(self):
+        ai = Mock()
+        collector = self.scanner_module.WindowsForensics(ai)
+        asyncio.run(collector._ai_summarize({'system': {'node': 'private-fixture'}}))
+        ai.model.generate_content.assert_not_called()
+
+    def test_ai_never_uses_encryption_key_as_provider_key(self):
+        with patch.dict(os.environ, {}, clear=True), \
+                patch.dict(self.scanner_module.CONFIG, {'ENCRYPTION_KEY': 'not-an-api-key'}), \
+                patch.object(self.scanner_module.genai, 'configure') as configure:
+            detector = self.scanner_module.AIMLDetector()
+        configure.assert_not_called()
+        self.assertIsNone(detector.model)
+
     def test_ai_success_invalid_data_and_transport_failure(self):
         detector = self.scanner_module.AIMLDetector()
         model = Mock()

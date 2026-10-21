@@ -25,42 +25,20 @@ def scan_open_ports():
     return results
 
 def audit_wifi_security():
-    # (نفس كود الواي فاي القديم - خليه زي ما هو عشان ممتاز)
-    # ... انسخ كود الواي فاي من الردود اللي فاتت ...
-    wifi_findings = []
-    try:
-        cmd_output = subprocess.check_output(["netsh", "wlan", "show", "profiles"], encoding='cp850', errors='ignore')
-        profiles = [line.split(":")[1].strip() for line in cmd_output.split('\n') if "All User Profile" in line or "ملفات تعريف" in line]
-        for profile in profiles:
-            try:
-                key_out = subprocess.check_output(["netsh", "wlan", "show", "profile", profile, "key=clear"], encoding='cp850', errors='ignore')
-                if "Key Content" in key_out or "محتوى المفتاح" in key_out:
-                    # فحص بسيط للطول
-                    pass 
-            except: continue
-    except: pass
-    return wifi_findings
+    """Compatibility hook: never retrieve saved Wi-Fi passwords."""
+    return [dict(type='Wi-Fi assessment unavailable', classification='unknown',
+                 severity='INFO', description='Wi-Fi security is not assessed; saved credentials are not read')]
+
 
 def check_dns_integrity():
-    """(جديد) فحص هل الـ DNS ملعوب فيه؟"""
+    """Hosts-file configuration observations, not a DNS reputation verdict."""
+    import os
+    from pathlib import Path
+    path = Path(os.environ.get('SystemRoot', r'C:\Windows')) / 'System32/drivers/etc/hosts'
     issues = []
-    try:
-        # فحص إعدادات DNS الحالية
-        output = subprocess.check_output("ipconfig /all", encoding='cp850', errors='ignore')
-        if "1.1.1.1" in output or "8.8.8.8" in output:
-            pass # DNS آمن (Cloudflare/Google)
-        else:
-            # لو الـ DNS مش معروف، ممكن يكون خطر (مش شرط بس تحذير)
-            pass
-            
-        # فحص ملف Hosts (المكان اللي الهاكرز بيقفلوا بيه مواقع الحماية)
-        hosts_path = r"C:\Windows\System32\drivers\etc\hosts"
-        with open(hosts_path, 'r') as f:
-            content = f.read()
-            for line in content.splitlines():
-                fields = line.split('#', 1)[0].split()
-                if len(fields) > 1 and any(domain in fields[1:] for domain in ('google.com', 'facebook.com', 'microsoft.com')):
-                    issues.append(f'Hosts mapping observed: {" ".join(fields)}; verify intended configuration')
-    except:
-        pass
+    with path.open('r', encoding='utf-8-sig', errors='replace') as handle:
+        for line in handle:
+            fields = line.split('#', 1)[0].split()
+            if len(fields) > 1:
+                issues.append(f'Hosts mapping observed: {" ".join(fields)}; verify intended configuration')
     return issues

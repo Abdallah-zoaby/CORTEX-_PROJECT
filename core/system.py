@@ -66,17 +66,16 @@ def scan_running_processes(inspector=None):
     return observations
 
 def scan_scheduled_tasks():
-    """(جديد) فحص المهام المجدولة الخبيثة"""
-    risky_tasks = []
-    try:
-        # بنستخدم أمر الويندوز عشان نجيب كل المهام
-        output = subprocess.check_output('schtasks /query /fo CSV /v', shell=True, encoding='cp850', errors='ignore')
-        for row in csv.DictReader(io.StringIO(output)):
-            text = ' '.join(str(v or '') for v in row.values()).lower()
-            if any(token in text for token in ('.vbs', '.bat', '.ps1', 'powershell')):
-                values = list(row.values())
-                name = row.get('TaskName') or (values[1] if len(values) > 1 else 'Name unavailable')
-                risky_tasks.append(f'Scripted task observation (not a malware verdict): {name}')
-    except:
-        pass
-    return risky_tasks
+    """Read scripted task observations; query failures propagate as unknown."""
+    output = subprocess.check_output(
+        ['schtasks', '/query', '/fo', 'CSV', '/v'], timeout=20,
+        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
+        encoding='cp850', errors='replace')
+    observations = []
+    for row in csv.DictReader(io.StringIO(output)):
+        text = ' '.join(str(v or '') for v in row.values()).lower()
+        if any(token in text for token in ('.vbs', '.bat', '.ps1', 'powershell')):
+            values = list(row.values())
+            name = row.get('TaskName') or (values[1] if len(values) > 1 else 'Name unavailable')
+            observations.append(f'Scripted task observation (not a malware verdict): {name}')
+    return observations
