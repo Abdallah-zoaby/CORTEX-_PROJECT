@@ -15,8 +15,7 @@ fake_db = [
 
 @app.after_request
 def add_headers(response):
-    response.headers["Server"] = "CORTEX-VULN-NODE/1.0 (CVE-2023-9999)"
-    response.headers["X-Powered-By"] = "PHP/5.2.17 (Legacy)"
+    response.headers["X-CORTEX-Training"] = "Synthetic fixture; no real confidential data"
     return response
 
 @app.route('/')
@@ -29,7 +28,7 @@ def login():
     if request.method == 'POST':
         user = request.form.get('username')
         pw = request.form.get('password')
-        if users.get(user) == pw:
+        if user in users and pw is not None and users[user] == pw:
             return jsonify({"status": "success", "message": f"Welcome {user}!", "token": "FAKE_SESS_TOKEN_99"}), 200
         return jsonify({"status": "failed", "message": "Invalid Credentials"}), 401
     return '<form method="post"><input name="username"><input name="password"><input type="submit"></form>'
@@ -63,20 +62,36 @@ def fake_shell():
     cmd = request.form.get('cmd')
     return jsonify({
         "status": "access_granted", 
-        "output": f"root@cortex-server:~# {cmd}\n[SUCCESS] Command executed in sandbox."
+        "output": "[SIMULATION ONLY] No command executed."
     }), 200
 
 def run_twin():
     app.run(port=5555, debug=False, use_reloader=False)
 
 class DigitalTwinTarget:
-    def __init__(self):
+    def __init__(self, port=5555):
+        self.port = port
         self.thread = None
+        self.server = None
 
     def start(self):
-        if not self.thread:
-            self.thread = threading.Thread(target=run_twin, daemon=True)
+        if not self.thread or not self.thread.is_alive():
+            from werkzeug.serving import make_server
+            try:
+                self.server = make_server('127.0.0.1', self.port, app, threaded=True)
+                self.port = self.server.server_port
+            except (OSError, SystemExit) as exc:
+                raise RuntimeError('Twin could not bind loopback port 5555; another service may be using it') from exc
+            self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
             self.thread.start()
+        return self.get_url()
+
+    def stop(self):
+        if self.server:
+            self.server.shutdown()
+            self.server.server_close()
+            self.server = None
+            self.thread = None
 
     def get_url(self):
-        return "http://127.0.0.1:5555"
+        return f"http://127.0.0.1:{self.port}"

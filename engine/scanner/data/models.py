@@ -36,6 +36,8 @@ class Finding(Base):
     evidence = Column(Text)
     impact = Column(Text)
     remediation = Column(Text)
+    remediation_patch = Column(Text)
+    cve_id = Column(String)
     tags = Column(JSON)
     timestamp = Column(DateTime, default=datetime.datetime.utcnow)
     scan = relationship("Scan", back_populates="findings")
@@ -68,6 +70,7 @@ class ExploitLog(Base):
     __tablename__ = 'exploit_logs'
     id = Column(Integer, primary_key=True)
     scan_id = Column(Integer)  # Optional linking
+    exploit_type = Column(String)
     target = Column(String)
     payload = Column(Text)
     result = Column(Text)
@@ -89,6 +92,8 @@ Session = sessionmaker(bind=engine)
 def init_database():
     """Initialize database with proper error handling"""
     try:
+        from .migrations import upgrade_legacy_schema
+        upgrade_legacy_schema(engine)
         Base.metadata.create_all(engine)
         logger.info("✅ Database initialized successfully")
         
