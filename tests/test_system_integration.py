@@ -560,9 +560,9 @@ class SystemIntegrationTests(unittest.TestCase):
     def test_ai_never_uses_encryption_key_as_provider_key(self):
         with patch.dict(os.environ, {}, clear=True), \
                 patch.dict(self.scanner_module.CONFIG, {'ENCRYPTION_KEY': 'not-an-api-key'}), \
-                patch.object(self.scanner_module.genai, 'configure') as configure:
+                patch.object(self.scanner_module.genai, 'Client') as client:
             detector = self.scanner_module.AIMLDetector()
-        configure.assert_not_called()
+        client.assert_not_called()
         self.assertIsNone(detector.model)
 
     def test_ai_success_invalid_data_and_transport_failure(self):

@@ -1,5 +1,5 @@
 customtkinter
-google-generativeai
+google-genai
 aiohttp
 playwright
 sqlalchemy

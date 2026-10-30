@@ -8,13 +8,13 @@ def main():
     if not api_key:
         print('Set TITANIUM_AI_KEY before checking available models.')
         return 1
-    import google.generativeai as genai
+    from google import genai
 
-    genai.configure(api_key=api_key)
+    client = genai.Client(api_key=api_key)
     print('Searching for available AI models...')
     try:
-        for model in genai.list_models():
-            if 'generateContent' in model.supported_generation_methods:
+        for model in client.models.list():
+            if 'generateContent' in (model.supported_actions or []):
                 print(f'Found: {model.name}')
     except Exception as exc:
         print(f'Error: {exc}')
@@ -23,4 +23,8 @@ def main():
 
 
 if __name__ == '__main__':
+    # Windows consoles default to cp1252/cp1256; force UTF-8 so emoji/Arabic output never crashes
+    for _stream in (sys.stdout, sys.stderr):
+        if hasattr(_stream, 'reconfigure'):
+            _stream.reconfigure(encoding='utf-8', errors='replace')
     sys.exit(main())

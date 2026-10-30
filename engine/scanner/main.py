@@ -47,7 +47,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 import csv
 from pathlib import Path
-import google.generativeai as genai
+from google import genai
+from google.genai import types as genai_types
 import io
 import xml.etree.ElementTree as ET
 import psutil
@@ -56,6 +57,28 @@ import shutil
 import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
+
+
+def utc_now():
+    """Naive UTC timestamp (replacement for the deprecated datetime.utcnow)."""
+    return datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+
+
+class GeminiModel:
+    """Thin adapter over the google.genai client exposing generate_content(prompt)."""
+
+    def __init__(self, api_key: str, model_name: str):
+        self.client = genai.Client(api_key=api_key)
+        self.model_name = model_name
+
+    def generate_content(self, prompt: str, request_options: Optional[Dict] = None):
+        config = None
+        timeout = (request_options or {}).get('timeout')
+        if timeout:
+            # google.genai expects the HTTP timeout in milliseconds
+            config = genai_types.GenerateContentConfig(
+                http_options=genai_types.HttpOptions(timeout=int(timeout * 1000)))
+        return self.client.models.generate_content(model=self.model_name, contents=prompt, config=config)
 
 # === CONFIGURATION ===
 CONFIG = {
@@ -133,7 +156,7 @@ class Vulnerability:
     cvss_score: float = 0.0
     cve_id: Optional[str] = None # New: CVE Reference
     references: List[str] = field(default_factory=list)
-    timestamp: datetime.datetime = field(default_factory=datetime.datetime.utcnow)
+    timestamp: datetime.datetime = field(default_factory=utc_now)
     tags: List[str] = field(default_factory=list)
 
 @dataclass
@@ -182,7 +205,7 @@ class Scan(Base):
     __tablename__ = 'scans'
     id = Column(Integer, primary_key=True)
     scan_uuid = Column(String(36), unique=True, nullable=False)
-    date = Column(DateTime, default=datetime.datetime.utcnow)
+    date = Column(DateTime, default=utc_now)
     target_url = Column(String)
     status = Column(String)
     mode = Column(String)
@@ -208,7 +231,7 @@ class Finding(Base):
     remediation_patch = Column(Text) # New
     cve_id = Column(String) # New
     tags = Column(JSON)
-    timestamp = Column(DateTime, default=datetime.datetime.utcnow)
+    timestamp = Column(DateTime, default=utc_now)
     scan = relationship("Scan", back_populates="findings")
 
 class AuditLog(Base):
@@ -219,7 +242,7 @@ class AuditLog(Base):
     method = Column(String)
     status_code = Column(Integer)
     response_time = Column(Float)
-    timestamp = Column(DateTime, default=datetime.datetime.utcnow)
+    timestamp = Column(DateTime, default=utc_now)
     scan = relationship("Scan", back_populates="logs")
 
 class ScanStats(Base):
@@ -244,7 +267,7 @@ class ExploitLog(Base):
     payload = Column(Text)
     result = Column(Text)
     success = Column(Boolean)
-    timestamp = Column(DateTime, default=datetime.datetime.utcnow)
+    timestamp = Column(DateTime, default=utc_now)
 
 class Plugin(Base):
     __tablename__ = 'plugins'
@@ -332,7 +355,7 @@ class SecurityManager:
     def log_security_event(self, event_type: str, details: Dict):
         """Log security events"""
         event = {
-            'timestamp': datetime.datetime.utcnow().isoformat(),
+            'timestamp': utc_now().isoformat(),
             'type': event_type,
             'details': details,
             'ip': self._get_client_ip(),
@@ -603,8 +626,7 @@ class AIMLDetector:
                  pass
 
             if api_key and os.getenv('TITANIUM_AI_MODEL'):
-                genai.configure(api_key=api_key)
-                self.model = genai.GenerativeModel(os.environ['TITANIUM_AI_MODEL'])
+                self.model = GeminiModel(api_key, os.environ['TITANIUM_AI_MODEL'])
                 logger.info("Optional AI explanation provider configured")
             else:
                 logger.warning("⚠️ AI explanation unavailable: set TITANIUM_AI_KEY and TITANIUM_AI_MODEL.")
@@ -1948,7 +1970,7 @@ class CortexScanner:
         self.db_session.add(self.scan_record)
         self.db_session.commit()
         
-        self.stats['start_time'] = datetime.datetime.utcnow()
+        self.stats['start_time'] = utc_now()
     
     async def _execute_scan(self, progress_callback=None) -> List[Vulnerability]:
         """Execute the main scanning logic"""
@@ -2191,7 +2213,7 @@ class CortexScanner:
         await self._enrich_vulnerability(vulnerability)
         
         # Add scan context
-        vulnerability.timestamp = datetime.datetime.utcnow()
+        vulnerability.timestamp = utc_now()
         
         # Save to database
         finding = Finding(
@@ -2333,7 +2355,7 @@ class CortexScanner:
     
     async def _generate_final_result(self, vulnerabilities: List[Vulnerability]) -> ScanResult:
         """Generate final scan result"""
-        self.stats['end_time'] = datetime.datetime.utcnow()
+        self.stats['end_time'] = utc_now()
         
         # Update scan record
         self.scan_record.status = "COMPLETED"
@@ -2470,5 +2492,9 @@ def main():
             loop.close()
 
 if __name__ == "__main__":
+    # Windows consoles default to cp1252/cp1256; force UTF-8 so emoji/Arabic output never crashes
+    for _stream in (sys.stdout, sys.stderr):
+        if hasattr(_stream, 'reconfigure'):
+            _stream.reconfigure(encoding='utf-8', errors='replace')
     # Existing reports belong to the user; never delete them on startup.
     main()

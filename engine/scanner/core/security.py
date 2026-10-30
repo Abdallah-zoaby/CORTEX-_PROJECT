@@ -10,6 +10,11 @@ from Crypto.Cipher import AES
 import logging
 from typing import Dict
 
+
+def utc_now():
+    """Naive UTC timestamp (replacement for the deprecated datetime.utcnow)."""
+    return datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+
 logger = logging.getLogger("TitaniumScanner")
 
 class SecurityManager:
@@ -56,7 +61,7 @@ class SecurityManager:
     def log_security_event(self, event_type: str, details: Dict):
         """Log security events"""
         event = {
-            'timestamp': datetime.datetime.utcnow().isoformat(),
+            'timestamp': utc_now().isoformat(),
             'type': event_type,
             'details': details,
             'ip': self._get_client_ip(),

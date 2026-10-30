@@ -4,6 +4,11 @@ from enum import Enum
 from typing import Dict, List, Optional, Any, Set
 import datetime
 
+
+def utc_now():
+    """Naive UTC timestamp (replacement for the deprecated datetime.utcnow)."""
+    return datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+
 class ScanMode(Enum):
     SAFE = "safe"
     DESTRUCTIVE = "destructive"
@@ -62,7 +67,7 @@ class Vulnerability:
     remediation: str = ""
     cvss_score: float = 0.0
     references: List[str] = field(default_factory=list)
-    timestamp: datetime.datetime = field(default_factory=datetime.datetime.utcnow)
+    timestamp: datetime.datetime = field(default_factory=utc_now)
     tags: List[str] = field(default_factory=list)
 
 @dataclass

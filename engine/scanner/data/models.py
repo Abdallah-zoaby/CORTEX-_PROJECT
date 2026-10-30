@@ -5,6 +5,11 @@ import datetime
 import logging
 from ..config import CONFIG
 
+
+def utc_now():
+    """Naive UTC timestamp (replacement for the deprecated datetime.utcnow)."""
+    return datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+
 logger = logging.getLogger("TitaniumScanner")
 
 Base = declarative_base()
@@ -13,7 +18,7 @@ class Scan(Base):
     __tablename__ = 'scans'
     id = Column(Integer, primary_key=True)
     scan_uuid = Column(String(36), unique=True, nullable=False)
-    date = Column(DateTime, default=datetime.datetime.utcnow)
+    date = Column(DateTime, default=utc_now)
     target_url = Column(String)
     status = Column(String)
     mode = Column(String)
@@ -39,7 +44,7 @@ class Finding(Base):
     remediation_patch = Column(Text)
     cve_id = Column(String)
     tags = Column(JSON)
-    timestamp = Column(DateTime, default=datetime.datetime.utcnow)
+    timestamp = Column(DateTime, default=utc_now)
     scan = relationship("Scan", back_populates="findings")
 
 class AuditLog(Base):
@@ -50,7 +55,7 @@ class AuditLog(Base):
     method = Column(String)
     status_code = Column(Integer)
     response_time = Column(Float)
-    timestamp = Column(DateTime, default=datetime.datetime.utcnow)
+    timestamp = Column(DateTime, default=utc_now)
     scan = relationship("Scan", back_populates="logs")
 
 class ScanStats(Base):
@@ -75,7 +80,7 @@ class ExploitLog(Base):
     payload = Column(Text)
     result = Column(Text)
     success = Column(Boolean)
-    timestamp = Column(DateTime, default=datetime.datetime.utcnow)
+    timestamp = Column(DateTime, default=utc_now)
 
 class Plugin(Base):
     __tablename__ = 'plugins'

@@ -98,4 +98,8 @@ def run_qa():
     return errors
 
 if __name__ == "__main__":
+    # Windows consoles default to cp1252/cp1256; force UTF-8 so emoji/Arabic output never crashes
+    for _stream in (sys.stdout, sys.stderr):
+        if hasattr(_stream, 'reconfigure'):
+            _stream.reconfigure(encoding='utf-8', errors='replace')
     sys.exit(1 if run_qa() else 0)

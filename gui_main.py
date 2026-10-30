@@ -8,7 +8,6 @@ import random
 import asyncio
 import aiohttp
 import math
-import google.generativeai as genai
 from engine.scanner.main import CortexScanner, ScanConfig, ScanMode, VulnerabilityType, SeverityLevel
 from engine.cortex import CortexScanner as SystemScanner
 from core.analytics import AnalyticsState
@@ -1832,5 +1831,9 @@ class CortexProApp(ctk.CTk):
             os.startfile(fname)
 
 if __name__ == "__main__":
+    # Windows consoles default to cp1252/cp1256; force UTF-8 so emoji/Arabic output never crashes
+    for _stream in (sys.stdout, sys.stderr):
+        if hasattr(_stream, 'reconfigure'):
+            _stream.reconfigure(encoding='utf-8', errors='replace')
     app = CortexProApp()
     app.mainloop()

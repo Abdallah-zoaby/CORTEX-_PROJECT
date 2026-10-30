@@ -68,5 +68,10 @@ def main():
         parser.print_help()
 
 if __name__ == "__main__":
+    import sys
+    # Windows consoles default to cp1252/cp1256; force UTF-8 so emoji/Arabic output never crashes
+    for _stream in (sys.stdout, sys.stderr):
+        if hasattr(_stream, 'reconfigure'):
+            _stream.reconfigure(encoding='utf-8', errors='replace')
     # Existing reports belong to the user; never delete them on startup.
     main()
